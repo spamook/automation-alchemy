@@ -26,18 +26,16 @@
     create_home: yes
     state: present
 
-- name: Allow devops passwordless sudo
-  copy:
-    dest: /etc/sudoers.d/devops
-    content: "devops ALL=(ALL) NOPASSWD:ALL\n"
-    validate: 'visudo -cf %s'
+- name: Set devops account password (required to demonstrate password-protected sudo)
+  ansible.builtin.shell: "echo 'devops:{{ devops_password }}' | chpasswd"
+  changed_when: true
 
 - name: Create .ssh directory for devops
   file:
     path: /home/devops/.ssh
     state: directory
     owner: devops
-    group: devopsп
+    group: devops
     mode: '0700'
 
 - name: Add Jenkins deploy key to devops authorized_keys

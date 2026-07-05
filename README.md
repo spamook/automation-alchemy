@@ -123,7 +123,7 @@ automation-alchemy/
 
 **common** — runs on every VM:
 - Installs base packages: curl, wget, git, ufw, sshguard, rsync, acl
-- Creates `devops` group and user with passwordless sudo
+- Creates `devops` group and user, added to `sudo` group (password required for sudo)
 - Adds the Jenkins public key to `devops` authorized_keys
 - Disables SSH password authentication and root login
 - Enables UFW with default deny-incoming, allows port 22
@@ -260,6 +260,7 @@ Paste the password into the Jenkins unlock page, install suggested plugins, crea
 - UFW firewall enabled on all VMs with deny-incoming by default
 - Each VM only opens ports required for its specific role
 - `devops` is the only login-capable user on all VMs
+- `sudo` for `devops` requires a password (`devops_password` in `ansible/group_vars/all.yml`, default `DevOps!2026`); only the load-balancer's automated `nginx`/`tee` reload commands are exempt via a scoped NOPASSWD rule for the cron-driven adaptive LB script
 - `sshguard` blocks brute-force SSH attempts on all VMs
 - The Jenkins SSH private key is in `.gitignore` and is never committed
 
