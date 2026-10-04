@@ -1,0 +1,15 @@
+{
+  "_meta": { "description": "Daily log indices written by Logstash" },
+  "index_patterns": ["infra-system-*", "infra-app-*", "infra-docker-*", "infra-unknown-*"],
+  "priority": 200,
+  "composed_of": ["infra-mappings"],
+  "template": {
+    "settings": {
+      "number_of_shards": 1,
+      "number_of_replicas": 1,
+      "refresh_interval": "5s",
+      "index.lifecycle.name": "infra-logs-30d",
+      "index.lifecycle.parse_origination_date": true
+    }
+  }
+}
