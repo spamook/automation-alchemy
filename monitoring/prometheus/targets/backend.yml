@@ -1,0 +1,7 @@
+# Node.js backend instances exposing prom-client metrics on :3001/prometheus
+- targets: ["192.168.56.13:3001"]
+  labels: { host: app-server, component: api }
+- targets: ["192.168.56.11:3001"]
+  labels: { host: web-server-1, component: sidecar }
+- targets: ["192.168.56.12:3001"]
+  labels: { host: web-server-2, component: sidecar }
