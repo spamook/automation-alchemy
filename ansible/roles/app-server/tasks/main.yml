@@ -7,10 +7,12 @@
     proto: tcp
     # web-server1/2 and ci-server
     # web-server1/2  requests API , ci-server checking state after deployment
+    # monitoring-server scrapes /prometheus
   loop:
     - '192.168.56.11'
     - '192.168.56.12'
     - '192.168.56.15'
+    - '192.168.56.16'
 
 - name: Deploy backend container
   become_user: devops
