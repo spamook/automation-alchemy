@@ -11,6 +11,9 @@
       - python3
       - rsync
       - acl
+      # tools for the alert tests (CPU/memory load, ifconfig)
+      - stress-ng
+      - net-tools
     state: present
 
 - name: Create devops group
