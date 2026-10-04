@@ -16,10 +16,8 @@
     # users / ssh/ ufw
     - common
 
-    #  docker needed servers
-    - role: docker
-      when: ansible_hostname in ['app-server', 'web-server-1', 'web-server-2', 'ci-server', 'monitoring-server']
-
+    # docker on every VM — the monitoring agents run as containers everywhere
+    - docker
 
     - role: app-server
       when: ansible_hostname == 'app-server'
@@ -39,3 +37,6 @@
     # Prometheus, Grafana, Elasticsearch, Logstash, Kibana
     - role: monitoring-server
       when: ansible_hostname == 'monitoring-server'
+
+    # node-exporter + cAdvisor + Filebeat on every VM
+    - monitoring-agents

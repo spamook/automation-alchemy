@@ -1,0 +1,62 @@
+# Filebeat — ships logs from this VM to Logstash on monitoring-server.
+# Values like ${HOST_NAME} come from environment variables set in docker-compose.yml/.env,
+# so the same file works on every VM and in every environment.
+
+# Name of this shipper -> becomes agent.name; host.name is the VM hostname (host network).
+name: ${HOST_NAME}
+
+filebeat.inputs:
+  # --- System logs (syslog + authentication) ---------------------------------
+  - type: filestream
+    id: system-logs
+    paths:
+      - /var/log/host/syslog
+      - /var/log/host/auth.log
+    fields:
+      log_type: system
+
+  # --- Our own scripts' logs (adaptive LB, backups, CI notifications) ---------
+  # Missing files are fine: each VM only has some of them.
+  - type: filestream
+    id: infra-script-logs
+    paths:
+      - /var/log/host/adaptive_lb.log
+      - /var/log/host/backup.log
+      - /var/log/host/jenkins-notifications.log
+    fields:
+      log_type: system
+
+  # --- Docker container logs (json-file driver) -------------------------------
+  - type: filestream
+    id: docker-logs
+    paths:
+      - /var/lib/docker/containers/*/*.log
+    parsers:
+      - container:
+          stream: all
+          format: docker
+    fields:
+      log_type: docker
+
+processors:
+  # container.id / container.name / container.image.name for docker logs
+  - add_docker_metadata:
+      host: "unix:///var/run/docker.sock"
+  # drop the very noisy docker label fields, we only need name/image
+  - drop_fields:
+      fields: ["container.labels"]
+      ignore_missing: true
+  - add_fields:
+      target: ""
+      fields:
+        environment: ${ENVIRONMENT:lab}
+
+output.logstash:
+  hosts: ["${LOGSTASH_HOST:192.168.56.16}:${LOGSTASH_PORT:5044}"]
+  # if Logstash is down Filebeat keeps the read offset and retries -> no logs are lost
+  backoff.init: 2s
+  backoff.max: 60s
+
+# Filebeat's own logs go to stderr -> "docker logs filebeat"
+logging.level: info
+logging.metrics.enabled: false

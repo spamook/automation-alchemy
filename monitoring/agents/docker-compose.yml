@@ -1,0 +1,78 @@
+# Monitoring & logging agents — deployed to EVERY VM (by Ansible on provisioning
+# and by the Jenkins "Deploy monitoring agents" stage on every pipeline run).
+#
+# Per-host values come from .env next to this file (written by Ansible / Jenkins):
+#   HOST_NAME      name shown in Grafana/Kibana (web-server-1, app-server, ...)
+#   ENVIRONMENT    lab / staging / prod — attached to every log event
+#   LOGSTASH_HOST  where Filebeat ships logs to
+#   LOGSTASH_PORT
+#
+# All three agents use the host network namespace:
+#   - node-exporter/cAdvisor must see the real host (interfaces, cgroups),
+#   - their ports are then protected by UFW (ports published with "-p" bypass UFW,
+#     because Docker inserts its own iptables rules in front of it).
+name: monitoring-agents
+
+services:
+  # Host metrics: CPU, memory, disk, network, load -> :9100/metrics
+  node-exporter:
+    image: prom/node-exporter:v1.9.1
+    container_name: node-exporter
+    restart: unless-stopped
+    network_mode: host
+    pid: host
+    command:
+      - --path.rootfs=/host
+      - --web.listen-address=:9100
+      # skip pseudo/virtual mounts and the VirtualBox shared folder (/vagrant is the Windows disk)
+      - --collector.filesystem.mount-points-exclude=^/(dev|proc|sys|run|var/lib/docker/.+|var/lib/containerd/.+|vagrant)($$|/)
+      - --collector.filesystem.fs-types-exclude=^(autofs|binfmt_misc|cgroup2?|configfs|debugfs|devpts|devtmpfs|fusectl|nsfs|overlay|proc|pstore|securityfs|squashfs|sysfs|tmpfs|tracefs|vboxsf)$$
+    volumes:
+      - /:/host:ro,rslave
+
+  # Per-container metrics: CPU, memory (+ limit), network, restarts -> :8081/metrics
+  # (8081 instead of the default 8080 because Jenkins already owns 8080 on ci-server)
+  cadvisor:
+    image: ghcr.io/google/cadvisor:v0.60.6
+    container_name: cadvisor
+    restart: unless-stopped
+    network_mode: host
+    privileged: true
+    devices:
+      - /dev/kmsg
+    command:
+      - --port=8081
+      - --docker_only=true
+      - --housekeeping_interval=15s
+      - --store_container_labels=false
+      # only keep the metric groups the dashboards/alerts use -> much less memory and CPU
+      - --disable_metrics=advtcp,cpu_topology,cpuset,disk,diskIO,hugetlb,memory_numa,percpu,perf_event,process,referenced_memory,resctrl,sched,tcp,udp
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+
+  # Log shipper: system logs + all Docker container logs -> Logstash
+  filebeat:
+    image: docker.elastic.co/beats/filebeat:8.19.22
+    container_name: filebeat
+    restart: unless-stopped
+    network_mode: host
+    user: root                       # needs to read /var/log/auth.log and other containers' logs
+    command: ["filebeat", "-e", "--strict.perms=false"]
+    environment:
+      - HOST_NAME=${HOST_NAME:?HOST_NAME must be set in .env}
+      - ENVIRONMENT=${ENVIRONMENT:-lab}
+      - LOGSTASH_HOST=${LOGSTASH_HOST:-192.168.56.16}
+      - LOGSTASH_PORT=${LOGSTASH_PORT:-5044}
+    volumes:
+      - ./filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
+      - /var/log:/var/log/host:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - filebeat-data:/usr/share/filebeat/data   # registry: remembers read offsets across restarts
+
+volumes:
+  filebeat-data:
