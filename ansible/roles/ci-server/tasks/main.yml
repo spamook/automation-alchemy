@@ -93,11 +93,13 @@
     mode: '0600'
     remote_src: yes
 
+# monitoring-server boots after ci-server, so its key may be missing here — the
+# monitoring stages in the Jenkinsfile use StrictHostKeyChecking=accept-new for that
 - name: Add servers to Jenkins known_hosts
   shell: |
-    ssh-keyscan -H -T 10 192.168.56.11 >> /var/lib/jenkins/.ssh/known_hosts || true
-    ssh-keyscan -H -T 10 192.168.56.12 >> /var/lib/jenkins/.ssh/known_hosts || true
-    ssh-keyscan -H -T 10 192.168.56.13 >> /var/lib/jenkins/.ssh/known_hosts || true
+    for ip in 10 11 12 13 14 15 16; do
+      ssh-keyscan -H -T 10 192.168.56.$ip >> /var/lib/jenkins/.ssh/known_hosts || true
+    done
   become_user: jenkins
 
 - name: Create Jenkins notifications log file
