@@ -1,2 +1,10 @@
 ---
 devops_password: "changeme"
+
+# --- monitoring (all optional, defaults shown) ---
+# grafana_admin_password: "admin"
+# monitoring_environment: "lab"          # "environment" field on every log event
+# logstash_host: "192.168.56.16"
+# prometheus_retention_time: "30d"
+# prometheus_retention_size: "5GB"
+# alert_forward_webhook_url: ""          # Slack webhook / Discord webhook + "/slack"
