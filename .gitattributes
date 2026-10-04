@@ -1,0 +1,6 @@
+# Everything in this repo is executed/read inside Linux VMs (shell scripts, Ansible, Logstash,
+# docker-compose). Keep LF line endings even when cloned on Windows with core.autocrlf=true,
+# otherwise "#!/bin/sh\r" breaks the scripts.
+* text=auto eol=lf
+*.png binary
+*.ico binary
