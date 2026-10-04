@@ -1,0 +1,26 @@
+# Grafana data sources — created automatically on Grafana start (no clicking in the UI).
+# Fixed uids so dashboards and alert rules can reference them.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      timeInterval: 15s          # = scrape_interval, so $__rate_interval is calculated correctly
+
+  - name: Elasticsearch logs
+    uid: elasticsearch-logs
+    type: elasticsearch
+    access: proxy
+    url: http://es01:9200
+    editable: false
+    jsonData:
+      index: "infra-*"
+      timeField: "@timestamp"
+      logMessageField: message
+      logLevelField: log.level

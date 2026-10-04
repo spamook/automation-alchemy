@@ -1,0 +1,12 @@
+# Loads every dashboard JSON from /var/lib/grafana/dashboards into the "Infrastructure" folder.
+apiVersion: 1
+
+providers:
+  - name: infrastructure
+    folder: Infrastructure
+    type: file
+    disableDeletion: true
+    allowUiUpdates: true          # experiments in the UI are allowed, the file stays the source of truth
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards
