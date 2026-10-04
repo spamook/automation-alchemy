@@ -80,3 +80,4 @@
       192.168.56.13 app-server
       192.168.56.14 backup-server
       192.168.56.15 ci-server
+      192.168.56.16 monitoring-server

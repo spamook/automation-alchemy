@@ -5,6 +5,8 @@ servers = {
   "app-server"    => { ip: "192.168.56.13", memory: 1024, cpus: 1 },
   "backup-server" => { ip: "192.168.56.14", memory: 512,  cpus: 1 },
   "ci-server"     => { ip: "192.168.56.15", memory: 2048, cpus: 2 },
+  # Prometheus, Grafana, 2x Elasticsearch, Logstash, Kibana (all in containers)
+  "monitoring-server" => { ip: "192.168.56.16", memory: 4096, cpus: 2 },
 }
 
 Vagrant.configure("2") do |config|
