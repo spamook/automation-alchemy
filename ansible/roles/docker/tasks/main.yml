@@ -22,13 +22,34 @@
     state: present
     update_cache: yes
 
-- name: Install Docker CE and docker-compose
+# daemon.json goes in BEFORE the engine is installed, so Docker starts with it right away
+# and containers deployed later in this play don't get killed by a restart at the end.
+- name: Create Docker config directory
+  file:
+    path: /etc/docker
+    state: directory
+    mode: '0755'
+
+- name: Configure Docker daemon (local registry + log rotation)
+  copy:
+    dest: /etc/docker/daemon.json
+    content: |
+      {
+        "insecure-registries": ["192.168.56.15:5000"],
+        "log-driver": "json-file",
+        "log-opts": { "max-size": "10m", "max-file": "3" }
+      }
+  notify: restart docker
+
+# docker-compose v1 (python) can't talk to Docker 29+ anymore (API too old),
+# so we use the compose v2 plugin: "docker compose ..."
+- name: Install Docker CE and compose plugin
   apt:
     name:
       - docker-ce
       - docker-ce-cli
       - containerd.io
-      - docker-compose
+      - docker-compose-plugin
     state: present
 
 - name: Add devops to docker group
@@ -43,11 +64,5 @@
     state: started
     enabled: yes
 
-- name: Configure insecure local registry
-  copy:
-    dest: /etc/docker/daemon.json
-    content: |
-      {
-        "insecure-registries": ["192.168.56.15:5000"]
-      }
-  notify: restart docker
+- name: Apply Docker config changes now (before containers are deployed)
+  meta: flush_handlers

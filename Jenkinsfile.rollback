@@ -28,7 +28,7 @@ pipeline {
                     ssh -i $SSH_KEY devops@$APP_SERVER \
                     "docker pull $REGISTRY/backend:$ROLLBACK_BUILD && \
                      docker tag $REGISTRY/backend:$ROLLBACK_BUILD $REGISTRY/backend:latest && \
-                     docker-compose -f /vagrant/docker-compose.backend.yml up -d"
+                     docker compose -f /vagrant/docker-compose.backend.yml up -d"
                 '''
             }
         }
@@ -39,12 +39,12 @@ pipeline {
                     ssh -i $SSH_KEY devops@$WEB1 \
                     "docker pull $REGISTRY/frontend:$ROLLBACK_BUILD && \
                      docker tag $REGISTRY/frontend:$ROLLBACK_BUILD $REGISTRY/frontend:latest && \
-                     docker-compose -f /vagrant/docker-compose.frontend.yml up -d"
+                     docker compose -f /vagrant/docker-compose.frontend.yml up -d"
 
                     ssh -i $SSH_KEY devops@$WEB2 \
                     "docker pull $REGISTRY/frontend:$ROLLBACK_BUILD && \
                      docker tag $REGISTRY/frontend:$ROLLBACK_BUILD $REGISTRY/frontend:latest && \
-                     docker-compose -f /vagrant/docker-compose.frontend.yml up -d"
+                     docker compose -f /vagrant/docker-compose.frontend.yml up -d"
                 '''
             }
         }

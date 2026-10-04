@@ -34,7 +34,7 @@ pipeline {
                 sh '''
                     ssh -i $SSH_KEY devops@$APP_SERVER \
                     "docker pull $REGISTRY/backend:latest && \
-                     docker-compose -f /vagrant/docker-compose.backend.yml up -d"
+                     docker compose -f /vagrant/docker-compose.backend.yml up -d"
                 '''
             }
         }
@@ -44,11 +44,11 @@ pipeline {
                 sh '''
                     ssh -i $SSH_KEY devops@$WEB1 \
                     "docker pull $REGISTRY/frontend:latest && \
-                     docker-compose -f /vagrant/docker-compose.frontend.yml up -d"
+                     docker compose -f /vagrant/docker-compose.frontend.yml up -d"
 
                     ssh -i $SSH_KEY devops@$WEB2 \
                     "docker pull $REGISTRY/frontend:latest && \
-                     docker-compose -f /vagrant/docker-compose.frontend.yml up -d"
+                     docker compose -f /vagrant/docker-compose.frontend.yml up -d"
                 '''
             }
         }

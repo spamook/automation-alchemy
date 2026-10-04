@@ -15,7 +15,7 @@
 - name: Deploy backend container
   become_user: devops
   shell: |
-    docker-compose -f docker-compose.backend.yml down --remove-orphans 2>/dev/null || true
-    docker-compose -f docker-compose.backend.yml up -d --build
+    docker compose -f docker-compose.backend.yml down --remove-orphans 2>/dev/null || true
+    docker compose -f docker-compose.backend.yml up -d --build
   args:
     chdir: /vagrant

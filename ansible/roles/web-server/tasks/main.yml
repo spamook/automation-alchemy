@@ -20,18 +20,20 @@
     owner: devops
     group: devops
 
+# frontend and sidecar are in the same compose project ("vagrant"), so no --remove-orphans:
+# it would delete the other one's container as an "orphan"
 - name: Deploy frontend container
   become_user: devops
   shell: |
-    docker-compose -f docker-compose.frontend.yml down --remove-orphans 2>/dev/null || true
-    docker-compose -f docker-compose.frontend.yml up -d --build
+    docker compose -f docker-compose.frontend.yml down 2>/dev/null || true
+    docker compose -f docker-compose.frontend.yml up -d --build
   args:
     chdir: /vagrant
 
 - name: Deploy metrics sidecar container
   become_user: devops
   shell: |
-    docker-compose -f docker-compose.sidecar.yml down --remove-orphans 2>/dev/null || true
-    docker-compose -f docker-compose.sidecar.yml up -d --build
+    docker compose -f docker-compose.sidecar.yml down 2>/dev/null || true
+    docker compose -f docker-compose.sidecar.yml up -d --build
   args:
     chdir: /vagrant
