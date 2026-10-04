@@ -1,0 +1,281 @@
+# Grafana alert rules (unified alerting), provisioned from this file.
+#
+# Every rule = A: PromQL instant query (one series per host/container)
+#              C: threshold on A  -> one alert instance per series that crosses it
+#   for:  how long the condition must stay true before the alert fires ("pending" until then).
+#         This is the main protection against false positives from short spikes.
+#
+# Rules are evaluated every 30s (interval of the group).
+apiVersion: 1
+
+groups:
+  # ------------------------------------------------------------------ VMs
+  - orgId: 1
+    name: vm-resources
+    folder: Infrastructure Alerts
+    interval: 30s
+    rules:
+      - uid: vm-high-cpu
+        title: High CPU usage
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              instant: true
+              # % of time the CPUs were NOT idle, averaged over all cores of the VM
+              expr: 100 * (1 - avg by (host) (rate(node_cpu_seconds_total{mode="idle"}[1m])))
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [80] }
+        for: 5m
+        noDataState: OK
+        execErrState: Error
+        labels:
+          severity: warning
+        annotations:
+          summary: 'CPU usage on {{ $labels.host }} is {{ printf "%.0f" $values.A.Value }}% (above 80% for 5 minutes)'
+          description: Check top processes with "top" or the container CPU panel in the Docker Container dashboard.
+
+      - uid: vm-high-memory
+        title: High memory usage
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              instant: true
+              # MemAvailable (not MemFree): page cache that can be dropped counts as available
+              expr: max by (host) (100 * (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes))
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [90] }
+        for: 5m
+        noDataState: OK
+        execErrState: Error
+        labels:
+          severity: warning
+        annotations:
+          summary: 'Memory usage on {{ $labels.host }} is {{ printf "%.0f" $values.A.Value }}% (above 90% for 5 minutes)'
+
+      - uid: vm-low-disk
+        title: Low disk space
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              instant: true
+              expr: min by (host) (100 * node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"})
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: lt, params: [20] }
+        for: 1m
+        noDataState: OK
+        execErrState: Error
+        labels:
+          severity: critical
+        annotations:
+          summary: 'Only {{ printf "%.1f" $values.A.Value }}% disk space left on / of {{ $labels.host }} (below 20%)'
+
+      - uid: vm-unreachable
+        title: VM unreachable
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              instant: true
+              # up = 1 if the last scrape of node-exporter succeeded, 0 if it failed
+              expr: max by (host) (up{job="node"})
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: lt, params: [1] }
+        for: 1m
+        noDataState: Alerting
+        execErrState: Error
+        labels:
+          severity: critical
+        annotations:
+          summary: '{{ $labels.host }} is unreachable — Prometheus cannot scrape node-exporter for over 1 minute'
+          description: Check that the VM is running (vagrant status), its network (ip a) and that UFW allows 9100 from 192.168.56.16.
+
+  # ------------------------------------------------------------------ containers
+  - orgId: 1
+    name: containers
+    folder: Infrastructure Alerts
+    interval: 30s
+    rules:
+      - uid: container-restarts
+        title: Container restarting
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 900, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              instant: true
+              # every restart gives the container a new start time -> count the changes
+              expr: max by (host, name) (changes(container_start_time_seconds{name!=""}[15m]))
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [3] }
+        for: 0s
+        noDataState: OK
+        execErrState: Error
+        labels:
+          severity: warning
+        annotations:
+          summary: 'Container {{ $labels.name }} on {{ $labels.host }} restarted {{ printf "%.0f" $values.A.Value }} times in the last 15 minutes'
+          description: Look at its logs in the Kibana "Docker Logs" dashboard (container.name filter) or "docker logs <name>".
+
+      - uid: container-high-memory
+        title: Container memory near limit
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              instant: true
+              # only containers that HAVE a memory limit (limit 0 = unlimited is filtered out)
+              expr: max by (host, name) (100 * container_memory_working_set_bytes{name!=""} / (container_spec_memory_limit_bytes{name!=""} > 0))
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [80] }
+        for: 1m
+        noDataState: OK
+        execErrState: Error
+        labels:
+          severity: warning
+        annotations:
+          summary: 'Container {{ $labels.name }} on {{ $labels.host }} uses {{ printf "%.0f" $values.A.Value }}% of its memory limit (above 80%)'
+
+  # ------------------------------------------------------------------ services
+  - orgId: 1
+    name: services
+    folder: Infrastructure Alerts
+    interval: 30s
+    rules:
+      - uid: es-cluster-not-green
+        title: Elasticsearch cluster yellow or red
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              instant: true
+              # exporter publishes one series per color, the active one has value 1
+              expr: max by (color) (elasticsearch_cluster_health_status{color=~"yellow|red"})
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+        for: 1m
+        noDataState: OK
+        execErrState: Error
+        labels:
+          severity: critical
+        annotations:
+          summary: 'Elasticsearch cluster status is {{ $labels.color }}'
+          description: 'yellow = some replica shards are unassigned (a data node is missing), red = some primary shards are missing. Check: curl localhost:9200/_cat/nodes on monitoring-server.'
+
+      - uid: es-unreachable
+        title: Elasticsearch unreachable
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              instant: true
+              expr: max(elasticsearch_cluster_health_up)
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: lt, params: [1] }
+        for: 1m
+        noDataState: Alerting
+        execErrState: Error
+        labels:
+          severity: critical
+        annotations:
+          summary: Elasticsearch does not answer health checks — logs are not being stored
+
+      - uid: backend-down
+        title: Backend instance down
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              instant: true
+              expr: max by (host) (up{job="backend"})
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: lt, params: [1] }
+        for: 2m
+        noDataState: OK
+        execErrState: Error
+        labels:
+          severity: critical
+        annotations:
+          summary: 'Backend on {{ $labels.host }} does not answer on :3001/prometheus for 2 minutes'
