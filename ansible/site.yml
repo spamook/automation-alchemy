@@ -18,7 +18,7 @@
 
     #  docker needed servers
     - role: docker
-      when: ansible_hostname in ['app-server', 'web-server-1', 'web-server-2', 'ci-server']
+      when: ansible_hostname in ['app-server', 'web-server-1', 'web-server-2', 'ci-server', 'monitoring-server']
 
 
     - role: app-server
@@ -35,3 +35,7 @@
 
     - role: ci-server
       when: ansible_hostname == 'ci-server'
+
+    # Prometheus, Grafana, Elasticsearch, Logstash, Kibana
+    - role: monitoring-server
+      when: ansible_hostname == 'monitoring-server'
