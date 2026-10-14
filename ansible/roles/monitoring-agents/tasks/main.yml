@@ -48,7 +48,7 @@
 
 - name: Start monitoring agents
   become_user: devops
-  command: docker compose up -d --remove-orphans
+  command: docker compose up -d --quiet-pull --remove-orphans
   args:
     chdir: /home/devops/monitoring-agents
   register: agents_up

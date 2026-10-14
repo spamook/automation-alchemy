@@ -5,6 +5,9 @@
 #   Alerts:  Grafana + Logstash -> alert-receiver (webhook, can forward to Slack/Discord)
 #
 # Start/update:  docker compose up -d        (from /home/devops/monitoring)
+#
+# Memory: the whole stack fits into the 3 GB VM. JVM heaps are small on purpose
+# (lab log volume is tiny) and can be raised in .env: ES_HEAP, LS_HEAP, KIBANA_HEAP_MB.
 name: monitoring
 
 x-logging: &logging
@@ -45,6 +48,7 @@ services:
       GF_USERS_ALLOW_SIGN_UP: "false"
       GF_ANALYTICS_REPORTING_ENABLED: "false"
       GF_NEWS_NEWS_FEED_ENABLED: "false"
+      GF_LOG_LEVEL: warn               # info logs every alert evaluation -> half of all container logs
       GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/vm-performance.json
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro   # datasources, dashboards, alerting
@@ -81,7 +85,7 @@ services:
       - cluster.name=infra-logs
       - cluster.initial_master_nodes=es01
       - discovery.seed_hosts=es02
-      - ES_JAVA_OPTS=-Xms384m -Xmx384m
+      - ES_JAVA_OPTS=-Xms${ES_HEAP:-256m} -Xmx${ES_HEAP:-256m}
       # lab setup: no TLS/auth inside the private network (never do this on the internet)
       - xpack.security.enabled=false
       - xpack.ml.enabled=false
@@ -98,7 +102,8 @@ services:
       interval: 10s
       timeout: 10s
       retries: 30
-      start_period: 30s
+      # first start on a slow VM (VirtualBox on top of Hyper-V) takes ~6 min
+      start_period: 600s
 
   es02:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.19.22
@@ -110,7 +115,7 @@ services:
       - node.roles=data,ingest
       - cluster.name=infra-logs
       - discovery.seed_hosts=es01
-      - ES_JAVA_OPTS=-Xms384m -Xmx384m
+      - ES_JAVA_OPTS=-Xms${ES_HEAP:-256m} -Xmx${ES_HEAP:-256m}
       - xpack.security.enabled=false
       - xpack.ml.enabled=false
       - cluster.routing.allocation.disk.threshold_enabled=false
@@ -141,7 +146,7 @@ services:
     restart: unless-stopped
     logging: *logging
     environment:
-      - LS_JAVA_OPTS=-Xms256m -Xmx256m
+      - LS_JAVA_OPTS=-Xms${LS_HEAP:-256m} -Xmx${LS_HEAP:-256m}
       - ALERT_WEBHOOK_URL=http://alert-receiver:9095/logstash
     volumes:
       - ./logstash/logstash.yml:/usr/share/logstash/config/logstash.yml:ro
@@ -161,7 +166,7 @@ services:
       - ELASTICSEARCH_HOSTS=["http://es01:9200"]
       - SERVER_PUBLICBASEURL=http://192.168.56.16:5601
       - TELEMETRY_OPTIN=false
-      - NODE_OPTIONS=--max-old-space-size=512
+      - NODE_OPTIONS=--max-old-space-size=${KIBANA_HEAP_MB:-512}
     ports:
       - "5601:5601"
     healthcheck:
@@ -169,7 +174,7 @@ services:
       interval: 15s
       timeout: 10s
       retries: 40
-      start_period: 60s
+      start_period: 600s
     depends_on:
       es01:
         condition: service_healthy
