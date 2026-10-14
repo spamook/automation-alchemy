@@ -18,9 +18,33 @@ cpu)
     stress-ng --cpu 8 --timeout "${2:-420s}" --metrics-brief
     ;;
 memory)
-    # 2 workers share the given % of AVAILABLE memory and keep it allocated (--vm-keep)
-    echo "Memory stress (${2:-90%} of available RAM) for 7 min -> expect 'High memory usage' after ~5-6 min"
-    stress-ng --vm 2 --vm-bytes "${2:-90%}" --vm-keep --timeout 420s --metrics-brief
+    # Keeps memory usage at ~92% for 7 minutes (alert: > 90% for 5 minutes).
+    # The VMs have swap, so a fixed allocation isn't enough: the kernel moves other
+    # processes' idle memory to swap and "available" memory grows again (that's why
+    # "stress-ng --vm 2 --vm-bytes 80%" often stays below 90% here). This allocator adds
+    # memory until usage is 92% and touches every page once a second so its own pages
+    # stay in RAM. Needs almost no CPU.
+    secs="${2:-420}"
+    echo "Holding memory usage at ~92% for ${secs}s -> expect 'High memory usage' after ~5-6 min"
+    python3 - "$secs" <<'PY'
+import sys, time
+
+def meminfo():
+    return {l.split(":")[0]: int(l.split()[1]) * 1024 for l in open("/proc/meminfo")}
+
+chunks, end = [], time.time() + int(sys.argv[1])
+while time.time() < end:
+    m = meminfo()
+    usage = 1 - m["MemAvailable"] / m["MemTotal"]
+    if usage < 0.92 and sum(map(len, chunks)) < m["MemTotal"]:
+        chunks.append(bytearray(16 * 2**20))      # +16 MB, zero-filled = really allocated
+    for c in chunks:                             # one write per page keeps it in RAM
+        for i in range(0, len(c), 4096):
+            c[i] ^= 1
+    print(f"\rusage {usage:.1%}, holding {sum(map(len, chunks)) // 2**20} MB ", end="", flush=True)
+    time.sleep(1)
+print()
+PY
     ;;
 disk)
     # Fill / until only 15% stays free (alert: < 20% free). fallocate only reserves
@@ -41,22 +65,35 @@ container-restarts)
     echo "Clean up with: $0 cleanup"
     ;;
 container-memory)
-    # 450 MB inside a 512 MB limit = 88% of the limit (alert: > 80% for 1 min)
+    # 225 MB inside a 256 MB limit = ~88% of the limit (alert: > 80% for 1 min).
+    # Same idea as "-m 512m + stress-ng 450M" from the task, scaled down for the 768 MB
+    # VMs; the pages are touched every second so they stay in RAM (no swapping) and the
+    # container needs almost no CPU.
     $DOCKER rm -f memory_test >/dev/null 2>&1 || true
-    $DOCKER run -d -m 512m --name memory_test colinianking/stress-ng \
-        --vm 1 --vm-bytes 450M --vm-keep --timeout 360s
-    echo "memory_test holds 450M of its 512M limit for 6 min -> expect 'Container memory near limit' after ~1-2 min"
+    $DOCKER run -d -m 256m --name memory_test python:3.12-alpine python -c '
+import time
+buf = bytearray(225 * 2**20)
+end = time.time() + 360
+while time.time() < end:
+    for i in range(0, len(buf), 4096):
+        buf[i] ^= 1
+    time.sleep(1)
+'
+    echo "memory_test holds 225M of its 256M limit for 6 min -> expect 'Container memory near limit' after ~1-2 min"
     ;;
 unreachable)
-    # Prometheus reaches the VMs over the host-only network (eth1 = 192.168.56.x).
-    # eth0 is Vagrant's NAT used by "vagrant ssh", so this session survives, and the
-    # interface comes back by itself afterwards.
-    secs="${2:-180}"
-    echo "eth1 down for ${secs}s -> expect 'VM unreachable' after ~1-2 min"
-    sudo ip link set eth1 down
+    # Prometheus reaches the VMs over the host-only network 192.168.56.x. In this Ubuntu
+    # box the interfaces are called enp0s3 (Vagrant NAT, used by "vagrant ssh") and
+    # enp0s8 (host-only), not eth0/eth1 -> look the interface up by its address.
+    # Only the host-only one goes down, so this ssh session survives, and the interface
+    # comes back by itself afterwards.
+    secs="${2:-300}"
+    iface=$(ip -o -4 addr show | awk '/ 192\.168\.56\./ {print $2; exit}')
+    echo "$iface down for ${secs}s -> expect 'VM unreachable' after ~3-4 min"
+    sudo ip link set "$iface" down
     sleep "$secs"
-    sudo ip link set eth1 up
-    echo "eth1 is up again -> the alert resolves within ~1 min"
+    sudo ip link set "$iface" up
+    echo "$iface is up again -> the alert resolves within ~1 min"
     ;;
 es-yellow)
     # run on monitoring-server: without the data node es02 all replica shards are unassigned
