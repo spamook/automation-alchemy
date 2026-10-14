@@ -54,6 +54,28 @@
     line: 'JAVA_ARGS="-Djava.awt.headless=true -Djenkins.install.runSetupWizard=false"'
     create: yes
 
+# On the 1.5 GB VM with a slow disk Jenkins needs more than the unit's default 90 s to
+# start, and systemd would kill it in the middle of the start-up
+- name: Create systemd override directory for Jenkins
+  file:
+    path: /etc/systemd/system/jenkins.service.d
+    state: directory
+    mode: '0755'
+
+- name: Give Jenkins more time to start
+  copy:
+    dest: /etc/systemd/system/jenkins.service.d/override.conf
+    content: |
+      [Service]
+      TimeoutStartSec=600
+    mode: '0644'
+  register: jenkins_override
+
+- name: Reload systemd units
+  systemd:
+    daemon_reload: yes
+  when: jenkins_override.changed
+
 - name: Enable and start Jenkins
   service:
     name: jenkins
@@ -114,5 +136,5 @@
   service:
     name: jenkins
     state: restarted
-  async: 120
-  poll: 5
+  async: 900
+  poll: 10
