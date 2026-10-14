@@ -1,5 +1,35 @@
 
 ---
+# The VMs are small (512-768 MB): Docker image builds / JVMs need room for peaks.
+# With swap they slow down instead of getting OOM-killed.
+- name: Create 1 GB swap file
+  command: fallocate -l 1G /swapfile
+  args:
+    creates: /swapfile
+  register: swap_file
+
+- name: Restrict swap file permissions
+  file:
+    path: /swapfile
+    mode: '0600'
+
+- name: Format and enable swap
+  shell: mkswap /swapfile && swapon /swapfile
+  when: swap_file.changed
+
+- name: Enable swap on boot
+  lineinfile:
+    path: /etc/fstab
+    line: '/swapfile none swap sw 0 0'
+
+# Use swap only under real memory pressure (default 60 swaps much earlier)
+- name: Prefer RAM over swap
+  sysctl:
+    name: vm.swappiness
+    value: '10'
+    state: present
+    reload: yes
+
 - name: Install base packages
   apt:
     name:
