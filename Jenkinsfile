@@ -75,7 +75,7 @@ pipeline {
                         -e "ssh $SSH_OPTS" monitoring/ devops@$MONITORING:/home/devops/monitoring/
                     ssh $SSH_OPTS devops@$MONITORING \
                     "cd /home/devops/monitoring && \
-                     docker compose up -d --remove-orphans && \
+                     docker compose up -d --quiet-pull --remove-orphans && \
                      curl -fsS -X POST http://localhost:9090/-/reload && \
                      docker compose restart grafana"
                 '''
@@ -97,7 +97,7 @@ pipeline {
                             | ssh $SSH_OPTS devops@$ip "cat > /home/devops/monitoring-agents/.env"
                         ssh $SSH_OPTS devops@$ip \
                         "cd /home/devops/monitoring-agents && \
-                         docker compose up -d --remove-orphans && \
+                         docker compose up -d --quiet-pull --remove-orphans && \
                          docker compose restart filebeat"
                     done
                 '''
