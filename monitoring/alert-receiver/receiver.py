@@ -9,6 +9,7 @@ URL ending in /slack) and every line is forwarded there as well.
 """
 import json
 import os
+import threading
 import urllib.request
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -16,6 +17,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 LOG_FILE = "/var/log/alerts/notifications.log"
 FORWARD_URL = os.environ.get("FORWARD_WEBHOOK_URL", "").strip()
 PORT = 9095
+# requests are handled in parallel threads; without a lock two lines can interleave
+OUTPUT_LOCK = threading.Lock()
 
 
 def format_grafana(payload):
@@ -72,12 +75,13 @@ class Handler(BaseHTTPRequestHandler):
             lines = format_logstash(payload)
 
         now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-        with open(LOG_FILE, "a", encoding="utf-8") as log:
+        with OUTPUT_LOCK, open(LOG_FILE, "a", encoding="utf-8") as log:
             for line in lines:
                 entry = f"{now} {line}"
                 print(entry, flush=True)
                 log.write(entry + "\n")
-                forward(line)
+        for line in lines:
+            forward(line)
 
         self.send_response(200)
         self.end_headers()
