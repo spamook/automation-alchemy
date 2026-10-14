@@ -1,7 +1,9 @@
 
 ---
-# The VMs are small (512-768 MB): Docker image builds / JVMs need room for peaks.
-# With swap they slow down instead of getting OOM-killed.
+# Swap comes first: on the 512-768 MB VMs the first apt run (plus unattended-upgrades,
+# which starts at boot when a VM was off for a while) can exhaust the memory otherwise.
+# Docker image builds / JVMs need room for peaks: with swap they slow down instead of
+# getting OOM-killed.
 - name: Create 1 GB swap file
   command: fallocate -l 1G /swapfile
   args:
@@ -30,6 +32,43 @@
     state: present
     reload: yes
 
+# A VM that was powered off for a while starts unattended-upgrades right after boot.
+# On the small VMs that run can take an hour and holds the dpkg lock the whole time.
+# Pause it (it runs again with the next daily timer, security updates stay enabled)...
+- name: Pause automatic upgrades running right now
+  shell:
+    cmd: |
+      systemctl stop apt-daily.service apt-daily-upgrade.service || true
+      # the services use KillMode=process, so the stop above does not reach unattended-upgrade
+      # itself; on SIGTERM it finishes the current package and exits (same as on shutdown)
+      pkill -TERM -f "^/usr/bin/python3 /usr/bin/unattended-upgrade" || true
+  changed_when: false
+
+# ...make every apt-get call (also Ansible's) wait for the lock instead of failing,
+# in case a timer starts it again in the middle of the play...
+- name: Let apt wait for the dpkg lock instead of failing
+  copy:
+    dest: /etc/apt/apt.conf.d/90lock-timeout
+    content: 'DPkg::Lock::Timeout "900";'
+    mode: '0644'
+
+# ...and finish a package install that was interrupted (stopped upgrade or a VM that was
+# powered off mid-upgrade), otherwise dpkg refuses to install anything
+- name: Finish interrupted package installs
+  command: dpkg --configure -a
+  changed_when: false
+  # dpkg itself doesn't wait for the lock: retry while a stopped upgrade winds down
+  register: dpkg_configure
+  until: dpkg_configure.rc == 0
+  retries: 60
+  delay: 10
+
+- name: Update apt cache
+  apt:
+    update_cache: yes
+    cache_valid_time: 3600
+    lock_timeout: 600
+
 - name: Install base packages
   apt:
     name:
@@ -45,6 +84,7 @@
       - stress-ng
       - net-tools
     state: present
+    lock_timeout: 600
 
 - name: Create devops group
   group:

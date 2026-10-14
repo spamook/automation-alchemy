@@ -6,14 +6,8 @@
   # sudo allow
   become: yes
 
-  pre_tasks:
-    - name: Update apt cache
-      apt:
-        update_cache: yes
-        cache_valid_time: 3600
-
   roles:
-    # users / ssh/ ufw
+    # swap, apt cache, users / ssh/ ufw
     - common
 
     # docker on every VM — the monitoring agents run as containers everywhere
