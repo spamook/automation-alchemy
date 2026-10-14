@@ -1,6 +1,6 @@
-# Automation Alchemy
+# Sherlock Logs
 
-A full-stack infrastructure monitoring application with fully automated provisioning, configuration management, CI/CD pipeline, and a centralized **monitoring, logging and alerting** stack.
+Centralized **monitoring, logging and alerting** for the Automation Alchemy infrastructure: a full-stack infrastructure monitoring application with fully automated provisioning, configuration management and CI/CD pipeline, now observed by Prometheus + Grafana and the ELK stack.
 
 7 virtual machines, network configuration, security hardening, application deployment, CI/CD, Prometheus + Grafana metrics, ELK logs and alerts — created with a single command.
 
@@ -9,8 +9,8 @@ A full-stack infrastructure monitoring application with fully automated provisio
 ## Quick Start
 
 ```bash
-git clone https://gitea.kood.tech/danilakargajev/automation-alchemy.git
-cd automation-alchemy
+git clone https://gitea.kood.tech/danilakargajev/sherlock-logs.git
+cd sherlock-logs
 ssh-keygen -t ed25519 -f ansible/files/jenkins_key -N ""
 vagrant up
 ```
@@ -31,7 +31,8 @@ Monitoring (from the host browser):
 
 - [Vagrant](https://www.vagrantup.com/) 2.3+
 - [VirtualBox](https://www.virtualbox.org/) 7.0+
-- ~11 GB free RAM (monitoring-server alone needs 4 GB)
+- ~10 GB free RAM — all 7 VMs together use ~9 GB, so a 16 GB host works with browsers/games closed
+- Hardware virtualization (AMD-V / VT-x) enabled in BIOS; on Windows the Hyper-V hypervisor should be off (see [Troubleshooting](#troubleshooting-the-host)), otherwise VirtualBox falls back to a much slower mode
 - 40 GB free disk space
 
 ---
@@ -61,12 +62,12 @@ Monitoring (from the host browser):
 | VM | IP | RAM | Role |
 |----|----|-----|------|
 | load-balancer | 192.168.56.10 | 512 MB | nginx reverse proxy, adaptive load balancing |
-| web-server-1 | 192.168.56.11 | 1 GB | frontend container, metrics sidecar |
-| web-server-2 | 192.168.56.12 | 1 GB | frontend container, metrics sidecar |
-| app-server | 192.168.56.13 | 1 GB | backend API container |
+| web-server-1 | 192.168.56.11 | 640 MB | frontend container, metrics sidecar |
+| web-server-2 | 192.168.56.12 | 640 MB | frontend container, metrics sidecar |
+| app-server | 192.168.56.13 | 768 MB | backend API container |
 | backup-server | 192.168.56.14 | 512 MB | scheduled rsync backups |
-| ci-server | 192.168.56.15 | 2 GB | Jenkins CI/CD, Docker registry |
-| monitoring-server | 192.168.56.16 | 4 GB | Prometheus, Grafana, Elasticsearch (2 nodes), Logstash, Kibana |
+| ci-server | 192.168.56.15 | 1.5 GB | Jenkins CI/CD, Docker registry |
+| monitoring-server | 192.168.56.16 | 4.5 GB | Prometheus, Grafana, Elasticsearch (2 nodes), Logstash, Kibana |
 
 Every VM also runs the monitoring agents: **node-exporter** (host metrics), **cAdvisor** (container metrics) and **Filebeat** (logs).
 
@@ -92,7 +93,7 @@ Every VM also runs the monitoring agents: **node-exporter** (host metrics), **cA
 ## Project Structure
 
 ```
-automation-alchemy/
+sherlock-logs/
 ├── Vagrantfile                    # 7 VM definitions with ansible_local provisioner
 ├── Jenkinsfile                    # CI/CD pipeline (Build > Push > Deploy > Monitoring > Smoke Test)
 ├── Jenkinsfile.rollback           # Parameterized rollback pipeline
@@ -382,10 +383,10 @@ Full details, design decisions and the theory behind them: **[docs/MONITORING.md
 
 | Alert | Condition |
 |---|---|
-| High CPU usage | CPU > 80% for 5 minutes |
+| High CPU usage | CPU > 80% for 5 minutes (iowait not counted) |
 | High memory usage | memory > 90% for 5 minutes |
 | Low disk space | free space on `/` < 20% |
-| VM unreachable | node-exporter not scrapeable for 1 minute |
+| VM unreachable | no successful node-exporter scrape for 2 minutes (fires after ~3 min) |
 | Container restarting | > 3 restarts in 15 minutes |
 | Container memory near limit | > 80% of its memory limit |
 | Elasticsearch cluster yellow or red | cluster health not green for 1 minute |
@@ -401,15 +402,17 @@ vagrant ssh monitoring-server -c "docker logs -f alert-receiver"
 **Testing the alerts** — run on the VM that should alert:
 ```bash
 vagrant ssh app-server -c "bash /vagrant/scripts/simulate-alerts.sh cpu"                 # CPU > 80% for 7 min
-vagrant ssh app-server -c "bash /vagrant/scripts/simulate-alerts.sh memory"              # memory > 90% for 7 min
+vagrant ssh web-server-1 -c "bash /vagrant/scripts/simulate-alerts.sh memory"            # memory at ~92% for 7 min
 vagrant ssh app-server -c "bash /vagrant/scripts/simulate-alerts.sh disk"                # fill / to 85%
 vagrant ssh app-server -c "bash /vagrant/scripts/simulate-alerts.sh container-restarts"  # crash-looping container
-vagrant ssh app-server -c "bash /vagrant/scripts/simulate-alerts.sh container-memory"    # 450M in a 512M container
-vagrant ssh backup-server -c "bash /vagrant/scripts/simulate-alerts.sh unreachable"      # eth1 down for 3 min
+vagrant ssh app-server -c "bash /vagrant/scripts/simulate-alerts.sh container-memory"    # 225M in a 256M container
+vagrant ssh load-balancer -c "bash /vagrant/scripts/simulate-alerts.sh unreachable"      # host-only interface down for 5 min
 vagrant ssh monitoring-server -c "bash /vagrant/scripts/simulate-alerts.sh es-yellow"    # stop es02 (es-green to restore)
 vagrant ssh app-server -c "bash /vagrant/scripts/simulate-alerts.sh log-alert"           # fake failed SSH login
 vagrant ssh app-server -c "bash /vagrant/scripts/simulate-alerts.sh cleanup"
 ```
+
+Run one test per VM at a time — the VMs are small, several heavy tests at once make a VM so slow that the results get muddy. Timings and results of a full test run: [docs/MONITORING.md](docs/MONITORING.md#test-run-2026-10-14).
 
 Optional settings (`ansible/group_vars/all.yml`): `grafana_admin_password`, `monitoring_environment`, `prometheus_retention_time`, `prometheus_retention_size`, `alert_forward_webhook_url` (Slack / Discord webhook to forward notifications to).
 
@@ -493,3 +496,20 @@ vagrant ssh web-server-1 -c "sudo docker ps --filter name=node-exporter --filter
 # Reload Prometheus after editing monitoring/prometheus/*
 vagrant ssh monitoring-server -c "curl -X POST localhost:9090/-/reload"
 ```
+
+---
+
+## Troubleshooting the host
+
+**`AMD-V is disabled in the BIOS (VERR_SVM_DISABLED)` / `VT-x is disabled`** — hardware virtualization is off in the firmware (BIOS updates reset it). Enable *SVM Mode* (AMD) or *Intel Virtualization Technology* in the BIOS.
+
+**VMs are very slow, VBox.log says `Attempting fall back to NEM`** — Windows runs its own hypervisor (Hyper-V, needed by WSL2 / Docker Desktop / VBS), so VirtualBox can't use AMD-V/VT-x directly and runs on top of Hyper-V ("turtle" icon). Elasticsearch and Kibana then take 10–20 minutes to start. Turn the Windows hypervisor off in an **administrator** terminal and reboot (WSL2 and Docker Desktop won't work until it's back on):
+```powershell
+bcdedit /set hypervisorlaunchtype off
+reg add "HKLM\SYSTEM\CurrentControlSet\Control\DeviceGuard" /v EnableVirtualizationBasedSecurity /t REG_DWORD /d 0 /f
+```
+To undo: `bcdedit /set hypervisorlaunchtype auto` and set `EnableVirtualizationBasedSecurity` back to `1`, then reboot.
+
+**Not enough RAM** — close browsers/games before `vagrant up`. During a demo, VMs you don't need at the moment can be paused with `vagrant suspend <vm>` (frees their RAM) and brought back with `vagrant resume <vm>` — note that a suspended VM fires the *VM unreachable* alert.
+
+**First provisioning after a VM was off for a long time** — Ubuntu's unattended-upgrades runs right after boot and holds the apt lock; the `common` role waits for it (can take a few minutes) and finishes interrupted `dpkg` runs automatically.
