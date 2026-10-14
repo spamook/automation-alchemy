@@ -21,6 +21,10 @@ services:
     restart: unless-stopped
     network_mode: host
     pid: host
+    # memory limit = memory+swap limit -> never swapped out: the agents must keep answering
+    # Prometheus even when the VM is under memory pressure (otherwise a busy VM looks "down")
+    mem_limit: 64m
+    memswap_limit: 64m
     command:
       - --path.rootfs=/host
       - --web.listen-address=:9100
@@ -38,6 +42,17 @@ services:
     restart: unless-stopped
     network_mode: host
     privileged: true
+    mem_limit: 192m
+    memswap_limit: 192m
+    # If containerd answers slowly while cAdvisor starts (VM boot, heavy load), cAdvisor
+    # gives up on Docker and silently reports only the host. Self-heal: when it can't see
+    # even its own container, stop it -> the restart policy starts a fresh one.
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8081/metrics | grep -q 'name=\"cadvisor\"' || kill 1"]
+      interval: 60s
+      timeout: 20s
+      start_period: 120s
+      retries: 1
     devices:
       - /dev/kmsg
     command:
@@ -61,6 +76,8 @@ services:
     restart: unless-stopped
     network_mode: host
     user: root                       # needs to read /var/log/auth.log and other containers' logs
+    mem_limit: 256m
+    memswap_limit: 256m
     command: ["filebeat", "-e", "--strict.perms=false"]
     environment:
       - HOST_NAME=${HOST_NAME:?HOST_NAME must be set in .env}
