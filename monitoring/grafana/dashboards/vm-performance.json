@@ -109,7 +109,7 @@
     {
       "type": "stat",
       "title": "VM status (node-exporter reachable)",
-      "description": "UP = Prometheus scraped node-exporter successfully. DOWN for > 1 min fires the 'VM unreachable' alert.",
+      "description": "UP = Prometheus scraped node-exporter successfully. No successful scrape for 3 min fires the 'VM unreachable' alert.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -272,7 +272,7 @@
     {
       "type": "timeseries",
       "title": "CPU usage %",
-      "description": "Share of time the CPUs were busy. Alert: > 80% for 5 minutes.",
+      "description": "Share of time the CPUs were busy (iowait counts as idle). Alert: > 80% for 5 minutes.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -284,7 +284,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "100 * (1 - avg by (host) (rate(node_cpu_seconds_total{mode=\"idle\", host=~\"$host\"}[$__rate_interval])))",
+          "expr": "100 * (1 - avg by (host) (rate(node_cpu_seconds_total{mode=~\"idle|iowait\", host=~\"$host\"}[$__rate_interval])))",
           "legendFormat": "{{host}}",
           "range": true,
           "instant": false,

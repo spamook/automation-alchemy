@@ -25,8 +25,10 @@ groups:
             model:
               refId: A
               instant: true
-              # % of time the CPUs were NOT idle, averaged over all cores of the VM
-              expr: 100 * (1 - avg by (host) (rate(node_cpu_seconds_total{mode="idle"}[1m])))
+              # % of time the CPUs were busy, averaged over all cores of the VM.
+              # iowait counts as idle: a VM that waits for its disk (e.g. while swapping)
+              # is not CPU-bound, and counting it caused false "high CPU" alerts
+              expr: 100 * (1 - avg by (host) (rate(node_cpu_seconds_total{mode=~"idle|iowait"}[1m])))
           - refId: C
             datasourceUid: __expr__
             model:
@@ -109,8 +111,10 @@ groups:
             model:
               refId: A
               instant: true
-              # up = 1 if the last scrape of node-exporter succeeded, 0 if it failed
-              expr: max by (host) (up{job="node"})
+              # up = 1 if a scrape of node-exporter succeeded, 0 if it failed.
+              # max_over_time over 2m = "not a single successful scrape for 2 minutes":
+              # one slow scrape on a VM under heavy load doesn't count as "unreachable"
+              expr: max by (host) (max_over_time(up{job="node"}[2m]))
           - refId: C
             datasourceUid: __expr__
             model:
@@ -125,7 +129,7 @@ groups:
         labels:
           severity: critical
         annotations:
-          summary: '{{ $labels.host }} is unreachable — Prometheus cannot scrape node-exporter for over 1 minute'
+          summary: '{{ $labels.host }} is unreachable — no successful node-exporter scrape for 3 minutes'
           description: Check that the VM is running (vagrant status), its network (ip a) and that UFW allows 9100 from 192.168.56.16.
 
   # ------------------------------------------------------------------ containers
@@ -236,7 +240,9 @@ groups:
             model:
               refId: A
               instant: true
-              expr: max(elasticsearch_cluster_health_up)
+              # the exporter only publishes cluster health while it can reach Elasticsearch:
+              # no health series (ES down, or the exporter itself down) -> 0
+              expr: count(elasticsearch_cluster_health_status) or vector(0)
           - refId: C
             datasourceUid: __expr__
             model:
@@ -263,7 +269,7 @@ groups:
             model:
               refId: A
               instant: true
-              expr: max by (host) (up{job="backend"})
+              expr: max by (host) (max_over_time(up{job="backend"}[2m]))
           - refId: C
             datasourceUid: __expr__
             model:
@@ -272,10 +278,10 @@ groups:
               expression: A
               conditions:
                 - evaluator: { type: lt, params: [1] }
-        for: 2m
+        for: 1m
         noDataState: OK
         execErrState: Error
         labels:
           severity: critical
         annotations:
-          summary: 'Backend on {{ $labels.host }} does not answer on :3001/prometheus for 2 minutes'
+          summary: 'Backend on {{ $labels.host }} does not answer on :3001/prometheus for 3 minutes'
