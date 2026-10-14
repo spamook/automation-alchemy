@@ -241,15 +241,15 @@ Grafana alert rules (`monitoring/grafana/provisioning/alerting/rules.yml`), eval
 
 | Alert | PromQL (simplified) | Condition | Pending (`for`) | Severity |
 |---|---|---|---|---|
-| High CPU usage | `100 * (1 - avg by (host) (rate(node_cpu_seconds_total{mode="idle"}[1m])))` | > 80 | 5m | warning |
+| High CPU usage | `100 * (1 - avg by (host) (rate(node_cpu_seconds_total{mode=~"idle\|iowait"}[1m])))` | > 80 | 5m | warning |
 | High memory usage | `100 * (1 - MemAvailable / MemTotal)` | > 90 | 5m | warning |
 | Low disk space | `100 * avail / size` of `/` | < 20 | 1m | critical |
-| VM unreachable | `up{job="node"}` | < 1 | 1m | critical |
+| VM unreachable | `max_over_time(up{job="node"}[2m])` (no successful scrape for 2 min) | < 1 | 1m | critical |
 | Container restarting | `changes(container_start_time_seconds[15m])` | > 3 | 0 (the 15 min window is in the query) | warning |
 | Container memory near limit | `working_set / (memory_limit > 0) * 100` | > 80 | 1m | warning |
 | Elasticsearch cluster yellow or red | `elasticsearch_cluster_health_status{color=~"yellow\|red"}` | > 0 | 1m | critical |
-| Elasticsearch unreachable | `elasticsearch_cluster_health_up` | < 1 | 1m | critical |
-| Backend instance down | `up{job="backend"}` | < 1 | 2m | critical |
+| Elasticsearch unreachable | `count(elasticsearch_cluster_health_status) or vector(0)` (exporter publishes health only while ES answers) | < 1 | 1m | critical |
+| Backend instance down | `max_over_time(up{job="backend"}[2m])` | < 1 | 1m | critical |
 
 Notifications go to the **contact point** `alert-receiver` (webhook). The **notification
 policy** groups alerts by `alertname` + `host`, waits 30 s to batch related alerts,
@@ -291,25 +291,52 @@ watch Grafana → Alerting → Alert rules (Normal → **Pending** → **Firing*
 
 | Test | Command | Expected |
 |---|---|---|
-| CPU > 80% for 5 min | `vagrant ssh app-server -c "bash /vagrant/scripts/simulate-alerts.sh cpu"` (= `stress-ng --cpu 8 --timeout 420s`) | Pending after ~30 s, Firing after ~5–6 min, Resolved when stress-ng ends |
+| CPU > 80% for 5 min | `vagrant ssh app-server -c "bash /vagrant/scripts/simulate-alerts.sh cpu"` (= `stress-ng --cpu 8 --timeout 420s`) | Pending after ~1 min, Firing 5 min later, Resolved when stress-ng ends |
 | Disk < 20% free | `... simulate-alerts.sh disk` (= `fallocate` up to 85% used), then `... cleanup` | Firing after ~1–2 min |
-| Memory > 90% for 5 min | `... simulate-alerts.sh memory` (= `stress-ng --vm 2 --vm-bytes 90% --vm-keep --timeout 420s`) | Firing after ~5–6 min |
-| Container restarts > 3 in 15 min | `... simulate-alerts.sh container-restarts` (= `docker run --restart=always --name test_container ubuntu bash -c "sleep 10; exit 1"`), then `... cleanup` | Firing after ~1–2 min |
-| Container memory > 80% of limit | `... simulate-alerts.sh container-memory` (= `docker run -m 512m --name memory_test colinianking/stress-ng --vm 1 --vm-bytes 450M --vm-keep --timeout 360s`) | Firing after ~1–2 min |
-| VM unreachable | `vagrant ssh backup-server -c "bash /vagrant/scripts/simulate-alerts.sh unreachable"` (= `sudo ip link set eth1 down` for 3 min) | Firing after ~1–2 min, resolves when eth1 is back |
-| Elasticsearch yellow | `vagrant ssh monitoring-server -c "bash /vagrant/scripts/simulate-alerts.sh es-yellow"` (= `docker stop es02`), then `es-green` | Firing after ~1–2 min |
+| Memory > 90% for 5 min | `vagrant ssh web-server-1 -c "bash /vagrant/scripts/simulate-alerts.sh memory"` (holds usage at ~92% for 7 min, see notes) | Firing after ~5–6 min |
+| Container restarts > 3 in 15 min | `... simulate-alerts.sh container-restarts` (= `docker run --restart=always --name test_container ubuntu bash -c "sleep 10; exit 1"`), then `... cleanup` | Firing after ~1–3 min |
+| Container memory > 80% of limit | `... simulate-alerts.sh container-memory` (= `docker run -m 256m --name memory_test python:3.12-alpine` holding 225 MB — the task's 450M-of-512M scaled down for the 768 MB VMs) | Firing after ~2 min |
+| VM unreachable | `vagrant ssh load-balancer -c "bash /vagrant/scripts/simulate-alerts.sh unreachable"` (= `sudo ip link set enp0s8 down` for 5 min) | Firing after ~3 min, resolves when the interface is back |
+| Elasticsearch yellow | `vagrant ssh monitoring-server -c "bash /vagrant/scripts/simulate-alerts.sh es-yellow"` (= `docker stop es02`), then `es-green` | Firing after ~2 min, resolved a few minutes after es02 is back |
 | Logstash log pattern | `... simulate-alerts.sh log-alert` or a real one: `ssh nobody@192.168.56.13` from another VM, or a wrong `sudo` password | notification within seconds |
 
 Notes:
 
+- **Run one test per VM at a time.** The VMs are tiny (1 vCPU, 512–768 MB, swap on the
+  host disk): CPU stress + memory stress + a crash-looping container together make a VM so
+  slow that even Docker's restart manager gives up, and the measurements get muddy.
 - The VMs have 1–2 vCPUs, so `--cpu 8` saturates them. The CPU/memory alerts need the
-  condition to hold for 5 minutes plus up to one evaluation interval, which is why the
-  script runs stress-ng for 7 minutes instead of 6.
-- `ifconfig eth0 down` from the task would cut Vagrant's NAT interface (the one
-  `vagrant ssh` uses); Prometheus talks to the VMs over **eth1** (192.168.56.x), so the
-  script takes eth1 down and brings it back automatically.
-- The stock `ubuntu` image has no `stress-ng`, so the container-memory test uses an image
-  that contains it.
+  condition to hold for 5 minutes plus the rate window and one evaluation interval, which
+  is why the script runs stress-ng for 7 minutes instead of 6.
+- **Memory test and swap.** The VMs have a swap file. Memory that a process allocated but
+  doesn't touch gets moved to swap and "available" memory grows again, so
+  `stress-ng --vm 2 --vm-bytes 80%` from the task peaked at only ~82–87% here (stress-ng
+  also limits a percentage to what is available). The script uses a small Python allocator
+  instead: it adds 16 MB blocks until usage is 92% and writes one byte per page every second,
+  so its pages stay in RAM. To use stress-ng anyway, give it an explicit size bigger than
+  the available memory, e.g. `stress-ng --vm 1 --vm-bytes 400M --timeout 420s` on a 640 MB VM.
+- **Interface names.** `ifconfig eth0 down` from the task would hit Vagrant's NAT interface
+  (the one `vagrant ssh` uses), and in this Ubuntu box the interfaces are called `enp0s3`
+  (NAT) and `enp0s8` (host-only 192.168.56.x) anyway. Prometheus talks to the VMs over
+  the host-only network, so the script looks up the interface with the 192.168.56.x address,
+  takes it down for 5 minutes and brings it back automatically.
+- The stock `ubuntu` image has no `stress-ng`, so the container tests use small images
+  that have what they need.
+
+### Test run (2026-10-14)
+
+All scenarios were run on the VMs; times are from Grafana's alert state history:
+
+| Alert | Trigger started | Pending | Firing | Notes |
+|---|---|---|---|---|
+| Elasticsearch cluster yellow | 19:19:39 `docker stop es02` | 19:20:51 | 19:21:53 | resolved 19:40 after `docker start es02` |
+| High CPU usage (app-server) | ~19:21 stress-ng | 19:22:08 | 19:27:09 | |
+| Container restarting (test_container) | ~19:20 | – | 19:26:39 | slow start because the VM was also running other tests |
+| Logstash `auth_failure` | 19:30:09 fake sshd line | – | notification 19:30:23 | |
+| Low disk space (web-server-1) | 19:29:28 fallocate | 19:32:40 | 19:33:40 | |
+| High memory usage (web-server-1) | 20:44:47 | 20:47:09 | 20:52:41 | |
+| Container memory near limit (memory_test) | 21:32:46 | 21:35:05 | 21:36:05 | |
+| VM unreachable (load-balancer) | ~21:34 enp0s8 down | 21:36:50 | 21:37:50 | resolved 21:40 when the interface came back |
 
 ---
 
@@ -341,7 +368,7 @@ Long-term retention strategy (beyond this lab):
 
 ## Automation: Ansible + Jenkins
 
-`vagrant up` creates the 7th VM (`monitoring-server`, 4 GB RAM) and runs the same
+`vagrant up` creates the 7th VM (`monitoring-server`, 4.5 GB RAM, 4 vCPUs) and runs the same
 `ansible/site.yml` as for the other VMs:
 
 - role **docker** — now on every VM (the agents are containers), compose v2 plugin,
@@ -397,14 +424,33 @@ credentials or Ansible Vault, and service discovery instead of static target fil
 
 **Graph is empty but target is UP**: wrong label in the query (`host` vs `instance`), metric
 name changed between exporter versions, or the `rate()` window is shorter than 2 scrape intervals.
-Use **Explore** and start from the bare metric name.
+Use **Explore** and start from the bare metric name. Real examples from this project:
+`elasticsearch_cluster_health_up` doesn't exist in elasticsearch-exporter 1.9 (the alert was
+stuck in NoData), and cAdvisor reporting only `id="/"`, see below.
+
+**Docker dashboard empty for one VM, cAdvisor target UP**: cAdvisor registers its Docker
+support once at start-up; if containerd answers slowly at that moment (VM boot, heavy load)
+its log says `Registration of the docker container factory failed: ... context deadline
+exceeded` and it silently reports only the host cgroup. The healthcheck in
+`monitoring/agents/docker-compose.yml` detects that (cAdvisor can't see its own container)
+and restarts it; by hand: `docker restart cadvisor`.
+
+**Target flaps between UP and DOWN while the VM is busy**: the VM answers slower than
+`scrape_timeout` (10 s). Usually a sign of heavy swapping on a small VM. The agents have
+`memswap_limit` = `mem_limit` so they are never swapped out, and the *VM unreachable* rule
+waits for 2 minutes without a single successful scrape before it counts as an outage.
+
+**Kibana saved objects import returns 500** (`Cannot read properties of undefined (reading
+'layers')` in the Kibana log): the objects have no `typeMigrationVersion`, so Kibana runs every
+migration since 7.x on them and the old Lens migrations crash on the current format. Objects
+exported from the same Kibana version always carry these fields.
 
 **No logs in Kibana**: `docker logs filebeat` on the VM (connection to 5044?), `docker logs
 logstash` (pipeline errors, mapping errors), `curl localhost:9200/_cat/indices?v` on
 monitoring-server, time picker range, and the right data view.
 
 **Elasticsearch won't start**: `max virtual memory areas vm.max_map_count [65530] is too low`
-→ sysctl (done by Ansible); out of memory → heap is set to 384 MB per node.
+→ sysctl (done by Ansible); out of memory → heap is 256 MB per node (`ES_HEAP` in `.env`).
 
 ---
 
@@ -550,6 +596,20 @@ Rules: base units (seconds, bytes), `_total` suffix for counters, low-cardinalit
 - require several conditions (`high CPU and high load`), exclude known noise
   (`name!~"test_.*"`), and check `noDataState` (a missing series isn't always an incident);
 - test with real load (the simulation script) and watch the Pending → Firing transitions.
+
+What testing actually changed in this project's rules:
+
+- **CPU usage counts `iowait` as idle.** During the memory test the VM was swapping and
+  `100 - idle` reported "100% CPU" although the CPU was just waiting for the disk.
+  Now: `1 - rate(idle + iowait)`.
+- **"Unreachable" = no successful scrape for 2 minutes** (`max_over_time(up[2m]) < 1`) instead
+  of `up == 0`. On a VM under heavy load single scrapes time out; with the old rule
+  *VM unreachable* and *Backend down* flapped during every load test. A real outage is still
+  detected after ~3 minutes.
+- **Monitoring must not be the first victim**: the agents are excluded from swap, otherwise
+  memory pressure on a VM makes it look "down" instead of "high memory".
+- **monitoring-server got more RAM** (4.5 GB): with 4 GB it idled at 87–89% memory, right
+  under the 90% threshold — a guaranteed source of false alerts.
 
 ### Logstash filters for parsing and matching
 
