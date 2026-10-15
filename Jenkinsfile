@@ -16,7 +16,7 @@ pipeline {
         SSH_KEY    = '/var/lib/jenkins/.ssh/id_ed25519'
         // accept-new: trust a host key on first connect (monitoring-server boots after
         // ci-server, so it is not in known_hosts yet), but fail if a known key changes
-        SSH_OPTS   = '-i /var/lib/jenkins/.ssh/id_ed25519 -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10'
+        SSH_OPTS   = '-i /var/lib/jenkins/.ssh/id_ed25519 -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30'
         // every VM that runs the monitoring agents: ip=hostname
         MONITORED_HOSTS = '192.168.56.10=load-balancer 192.168.56.11=web-server-1 192.168.56.12=web-server-2 192.168.56.13=app-server 192.168.56.14=backup-server 192.168.56.15=ci-server 192.168.56.16=monitoring-server'
         LOGSTASH_HOST   = '192.168.56.16'
