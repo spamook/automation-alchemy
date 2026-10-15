@@ -3,3 +3,8 @@
   service:
     name: sshd
     state: restarted
+
+- name: restart sshguard
+  service:
+    name: sshguard
+    state: restarted
