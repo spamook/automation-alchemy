@@ -302,7 +302,7 @@ watch Grafana → Alerting → Alert rules (Normal → **Pending** → **Firing*
 
 Notes:
 
-- **Run one test per VM at a time.** The VMs are tiny (1 vCPU, 512–768 MB, swap on the
+- **Run one test per VM at a time.** The VMs are tiny (1 vCPU, 640–768 MB, swap on the
   host disk): CPU stress + memory stress + a crash-looping container together make a VM so
   slow that even Docker's restart manager gives up, and the measurements get muddy.
 - The VMs have 1–2 vCPUs, so `--cpu 8` saturates them. The CPU/memory alerts need the

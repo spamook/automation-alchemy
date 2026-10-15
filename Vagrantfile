@@ -1,12 +1,12 @@
-# Memory is sized so that all 7 VMs (~9 GB) fit on a 16 GB host.
+# Memory is sized so that all 7 VMs (~9.3 GB) fit on a 16 GB host.
 # Every VM also gets a 1 GB swap file (common role) to survive short peaks
 # such as Docker image builds or Kibana start-up.
 servers = {
-  "load-balancer" => { ip: "192.168.56.10", memory: 512,  cpus: 1 },
+  "load-balancer" => { ip: "192.168.56.10", memory: 640,  cpus: 1 },
   "web-server-1"  => { ip: "192.168.56.11", memory: 640,  cpus: 1 },
   "web-server-2"  => { ip: "192.168.56.12", memory: 640,  cpus: 1 },
   "app-server"    => { ip: "192.168.56.13", memory: 768,  cpus: 1 },
-  "backup-server" => { ip: "192.168.56.14", memory: 512,  cpus: 1 },
+  "backup-server" => { ip: "192.168.56.14", memory: 640,  cpus: 1 },
   "ci-server"     => { ip: "192.168.56.15", memory: 1536, cpus: 2 },
   # Prometheus, Grafana, 2x Elasticsearch, Logstash, Kibana (all in containers);
   # the stack uses ~3.4 GB, with less RAM the JVMs + Kibana swap and time out (and the VM

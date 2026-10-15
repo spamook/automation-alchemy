@@ -31,7 +31,7 @@ Monitoring (from the host browser):
 
 - [Vagrant](https://www.vagrantup.com/) 2.3+
 - [VirtualBox](https://www.virtualbox.org/) 7.0+
-- ~10 GB free RAM — all 7 VMs together use ~9 GB, so a 16 GB host works with browsers/games closed
+- ~10 GB free RAM — all 7 VMs together use ~9.3 GB, so a 16 GB host works with browsers/games closed
 - Hardware virtualization (AMD-V / VT-x) enabled in BIOS; on Windows the Hyper-V hypervisor should be off (see [Troubleshooting](#troubleshooting-the-host)), otherwise VirtualBox falls back to a much slower mode
 - 40 GB free disk space
 
@@ -61,11 +61,11 @@ Monitoring (from the host browser):
 
 | VM | IP | RAM | Role |
 |----|----|-----|------|
-| load-balancer | 192.168.56.10 | 512 MB | nginx reverse proxy, adaptive load balancing |
+| load-balancer | 192.168.56.10 | 640 MB | nginx reverse proxy, adaptive load balancing |
 | web-server-1 | 192.168.56.11 | 640 MB | frontend container, metrics sidecar |
 | web-server-2 | 192.168.56.12 | 640 MB | frontend container, metrics sidecar |
 | app-server | 192.168.56.13 | 768 MB | backend API container |
-| backup-server | 192.168.56.14 | 512 MB | scheduled rsync backups |
+| backup-server | 192.168.56.14 | 640 MB | scheduled rsync backups |
 | ci-server | 192.168.56.15 | 1.5 GB | Jenkins CI/CD, Docker registry |
 | monitoring-server | 192.168.56.16 | 4.5 GB | Prometheus, Grafana, Elasticsearch (2 nodes), Logstash, Kibana |
 

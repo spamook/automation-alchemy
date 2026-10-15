@@ -1,6 +1,6 @@
 
 ---
-# Swap comes first: on the 512-768 MB VMs the first apt run (plus unattended-upgrades,
+# Swap comes first: on the 640-768 MB VMs the first apt run (plus unattended-upgrades,
 # which starts at boot when a VM was off for a while) can exhaust the memory otherwise.
 # Docker image builds / JVMs need room for peaks: with swap they slow down instead of
 # getting OOM-killed.
