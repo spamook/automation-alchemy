@@ -86,14 +86,16 @@ pipeline {
             steps {
                 // Same agents everywhere; only .env differs per host / per environment
                 sh '''
+                    # the very first build after adding the parameter runs without it
+                    deploy_env=${DEPLOY_ENV:-lab}
                     for target in $MONITORED_HOSTS; do
                         ip=${target%%=*}
                         name=${target#*=}
-                        echo "==> monitoring agents on $name ($ip), environment=$DEPLOY_ENV"
+                        echo "==> monitoring agents on $name ($ip), environment=$deploy_env"
                         rsync -az --delete --exclude .env \
                             -e "ssh $SSH_OPTS" monitoring/agents/ devops@$ip:/home/devops/monitoring-agents/
                         printf 'HOST_NAME=%s\\nENVIRONMENT=%s\\nLOGSTASH_HOST=%s\\nLOGSTASH_PORT=5044\\n' \
-                            "$name" "$DEPLOY_ENV" "$LOGSTASH_HOST" \
+                            "$name" "$deploy_env" "$LOGSTASH_HOST" \
                             | ssh $SSH_OPTS devops@$ip "cat > /home/devops/monitoring-agents/.env"
                         ssh $SSH_OPTS devops@$ip \
                         "cd /home/devops/monitoring-agents && \
