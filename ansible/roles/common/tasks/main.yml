@@ -86,6 +86,17 @@
     state: present
     lock_timeout: 600
 
+# Services keep running on the old libraries after an upgrade. Jenkins even breaks:
+# after a JDK update under a running Jenkins every job fails with "Failed to exec spawn
+# helper ... JDK version mismatch" until it is restarted. needrestart (installed by
+# default) restarts affected services after each apt run in mode 'a' - the default on
+# Ubuntu 24.04. Docker is excluded in its default config, so containers aren't bounced.
+- name: Restart services automatically after library updates
+  copy:
+    dest: /etc/needrestart/conf.d/50-autorestart.conf
+    content: "$nrconf{restart} = 'a';\n"
+    mode: '0644'
+
 # ci-server's ssh-keyscan (and Jenkins deploying to all VMs in a row) looks like a
 # brute-force attack to sshguard, which then blocked the CI server for 2 minutes and
 # deployments failed. Trust only the CI server, everyone else is still watched.

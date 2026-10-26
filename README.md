@@ -513,3 +513,5 @@ To undo: `bcdedit /set hypervisorlaunchtype auto` and set `EnableVirtualizationB
 **Not enough RAM** — close browsers/games before `vagrant up`. During a demo, VMs you don't need at the moment can be paused with `vagrant suspend <vm>` (frees their RAM) and brought back with `vagrant resume <vm>` — note that a suspended VM fires the *VM unreachable* alert.
 
 **First provisioning after a VM was off for a long time** — Ubuntu's unattended-upgrades runs right after boot and holds the apt lock; the `common` role waits for it (can take a few minutes) and finishes interrupted `dpkg` runs automatically.
+
+**Jenkins job fails before the first stage with `Failed to exec spawn helper ... JDK version mismatch`** — unattended-upgrades updated the JDK while Jenkins was running. Restart Jenkins: `vagrant ssh ci-server -c "sudo systemctl restart jenkins"`. Provisioning configures `needrestart` to restart affected services automatically after updates, so this only happens on VMs that weren't re-provisioned since.
