@@ -1,0 +1,96 @@
+# Build agent: one pod per pipeline run, created by the Jenkins Kubernetes plugin and
+# deleted when the run ends. Each step runs in the container that has its tool; they all
+# share the workspace volume the plugin mounts at /home/jenkins/agent.
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    app.kubernetes.io/name: jenkins-agent
+spec:
+  # may roll out the app in the "app" namespace (manifests/cicd/rbac.yaml), nothing else
+  serviceAccountName: jenkins-deployer
+  securityContext:
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    # connects back to the controller and runs git checkout
+    - name: jnlp
+      image: jenkins/inbound-agent:3395.v6e5377b_0fb_3c-1-jdk21
+      resources:
+        requests: { cpu: 100m, memory: 256Mi }
+        limits: { cpu: "1", memory: 512Mi }
+      securityContext:
+        runAsUser: 1000
+        runAsNonRoot: true
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: [ALL]
+    # npm ci, type check, lint, build
+    - name: node
+      image: node:24.19.0-alpine3.24
+      command: [cat]
+      tty: true
+      resources:
+        requests: { cpu: 100m, memory: 256Mi }
+        limits: { cpu: "2", memory: 1Gi }
+      securityContext:
+        runAsUser: 1000
+        runAsNonRoot: true
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: [ALL]
+    # builds images from the Dockerfiles without a Docker daemon. It has to run as root
+    # to unpack image layers, but it is not privileged and has no host access.
+    - name: kaniko
+      image: martizih/kaniko:v1.29.0-debug
+      command: [/busybox/cat]
+      tty: true
+      resources:
+        requests: { cpu: 100m, memory: 256Mi }
+        limits: { cpu: "2", memory: 1536Mi }
+      securityContext:
+        runAsUser: 0
+        allowPrivilegeEscalation: false
+    # vulnerability scanner; its database is cached on a persistent volume
+    - name: trivy
+      image: aquasec/trivy:0.76.1
+      command: [cat]
+      tty: true
+      env:
+        - name: TRIVY_CACHE_DIR
+          value: /trivy-cache
+        - name: TRIVY_NO_PROGRESS
+          value: "true"
+        # the in-cluster registry speaks plain HTTP
+        - name: TRIVY_INSECURE
+          value: "true"
+      resources:
+        requests: { cpu: 100m, memory: 256Mi }
+        limits: { cpu: "1", memory: 1Gi }
+      securityContext:
+        runAsUser: 1000
+        runAsNonRoot: true
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: [ALL]
+      volumeMounts:
+        - name: trivy-cache
+          mountPath: /trivy-cache
+    # kubectl + curl for the deploy and smoke test (cicd/tools/Dockerfile)
+    - name: tools
+      image: 10.96.0.50/ci-tools:initial
+      command: [cat]
+      tty: true
+      resources:
+        requests: { cpu: 50m, memory: 32Mi }
+        limits: { cpu: 500m, memory: 128Mi }
+      securityContext:
+        runAsUser: 1000
+        runAsNonRoot: true
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: [ALL]
+  volumes:
+    - name: trivy-cache
+      persistentVolumeClaim:
+        claimName: trivy-cache

@@ -1,0 +1,152 @@
+// Build -> scan -> deploy, entirely inside the cluster.
+// Every run gets its own agent pod (cicd/agent-pod.yaml); nothing runs on the controller.
+pipeline {
+    agent {
+        kubernetes {
+            yamlFile 'cicd/agent-pod.yaml'
+        }
+    }
+
+    options {
+        timestamps()
+        timeout(time: 30, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '20'))
+        disableConcurrentBuilds()
+    }
+
+    environment {
+        REGISTRY = '10.96.0.50'
+        APP_URL  = 'http://frontend.app.svc.cluster.local'
+        API_URL  = 'http://backend.app.svc.cluster.local:3001'
+    }
+
+    stages {
+        stage('Prepare') {
+            steps {
+                script {
+                    // build number + commit: every image can be traced back to its source
+                    env.TAG = "${env.BUILD_NUMBER}-${env.GIT_COMMIT.take(7)}"
+                }
+                echo "Image tag: ${env.TAG}"
+            }
+        }
+
+        stage('Test') {
+            steps {
+                container('node') {
+                    sh '''
+                        cd backend
+                        npm ci --no-audit --no-fund
+                        npm run build
+                        cd ../frontend
+                        npm ci --no-audit --no-fund
+                        npm run lint
+                        npm run build
+                    '''
+                }
+            }
+        }
+
+        stage('Build images') {
+            steps {
+                container('kaniko') {
+                    sh '''
+                        for app in backend frontend; do
+                            /kaniko/executor \
+                                --context "dir://$WORKSPACE/$app" \
+                                --dockerfile "$WORKSPACE/$app/Dockerfile" \
+                                --destination "$REGISTRY/$app:$TAG" \
+                                --insecure --insecure-registry "$REGISTRY" \
+                                --cache=true --cache-repo "$REGISTRY/cache" \
+                                --registry-mirror mirror.gcr.io \
+                                --cleanup
+                        done
+                    '''
+                }
+            }
+        }
+
+        stage('Scan images') {
+            steps {
+                container('trivy') {
+                    sh '''
+                        for app in backend frontend; do
+                            image="$REGISTRY/$app:$TAG"
+                            # full report (HIGH + CRITICAL) is kept as a build artifact
+                            trivy image --image-src remote --severity HIGH,CRITICAL \
+                                --format table --output "trivy-$app.txt" "$image"
+                            # the gate: any CRITICAL vulnerability fails the build before deploy
+                            trivy image --image-src remote --skip-db-update --severity CRITICAL \
+                                --exit-code 1 "$image"
+                        done
+                    '''
+                }
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'trivy-*.txt', allowEmptyArchive: true
+                }
+            }
+        }
+
+        stage('Deploy') {
+            steps {
+                container('tools') {
+                    // the same manifests as in git, only with this build's image tags
+                    sh '''
+                        mkdir -p deploy
+                        cat > deploy/kustomization.yaml <<EOF
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../manifests/backend
+  - ../manifests/frontend
+images:
+  - name: $REGISTRY/backend
+    newTag: "$TAG"
+  - name: $REGISTRY/frontend
+    newTag: "$TAG"
+EOF
+                        kubectl apply -k deploy
+                        kubectl -n app rollout status deployment/backend --timeout=180s
+                        kubectl -n app rollout status deployment/frontend --timeout=180s
+                    '''
+                }
+            }
+        }
+
+        stage('Smoke test') {
+            steps {
+                container('tools') {
+                    sh '''
+                        curl -fsS --max-time 10 "$APP_URL/" | grep -q '<div id="root">'
+                        curl -fsS --max-time 10 "$APP_URL/api/health" | grep -q '"ok"'
+                        curl -fsS --max-time 10 "$APP_URL/api/metrics" | grep -q '"hostname"'
+                        curl -fsS --max-time 10 "$API_URL/prometheus" | grep -q infra_metrics_served_total
+                        echo "smoke test passed"
+                    '''
+                }
+            }
+            post {
+                // the new version is broken: put the previous ReplicaSets back
+                failure {
+                    container('tools') {
+                        sh '''
+                            kubectl -n app rollout undo deployment/backend
+                            kubectl -n app rollout undo deployment/frontend
+                        '''
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "Deployed ${env.TAG}: backend and frontend are live"
+        }
+        failure {
+            echo "Build ${env.TAG} failed, the running version was not changed"
+        }
+    }
+}
