@@ -1,0 +1,46 @@
+{
+  "index_patterns": ["k8s-logs-*"],
+  "priority": 200,
+  "template": {
+    "settings": {
+      "number_of_shards": 1,
+      "number_of_replicas": 0,
+      "index.lifecycle.name": "k8s-logs",
+      "index.mapping.total_fields.limit": 2000
+    },
+    "mappings": {
+      "date_detection": false,
+      "dynamic_templates": [
+        {
+          "strings_as_keyword": {
+            "match_mapping_type": "string",
+            "mapping": { "type": "keyword", "ignore_above": 1024 }
+          }
+        }
+      ],
+      "properties": {
+        "@timestamp": { "type": "date" },
+        "log": { "type": "text" },
+        "message": {
+          "type": "text",
+          "fields": { "keyword": { "type": "keyword", "ignore_above": 256 } }
+        },
+        "status": { "type": "long" },
+        "durationMs": { "type": "long" },
+        "bytes": { "type": "long" },
+        "request_time": { "type": "float" },
+        "kubernetes": {
+          "properties": {
+            "labels": { "type": "flattened" },
+            "annotations": { "type": "flattened" }
+          }
+        },
+        "metadata": {
+          "properties": {
+            "managedFields": { "type": "object", "enabled": false }
+          }
+        }
+      }
+    }
+  }
+}

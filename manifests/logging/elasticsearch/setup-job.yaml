@@ -1,0 +1,56 @@
+# One-shot configuration of Elasticsearch: users and roles, index template, lifecycle.
+# scripts/deploy.sh deletes the finished Job before applying, so a changed script runs again.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: elasticsearch-setup
+  namespace: logging
+spec:
+  backoffLimit: 10
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: elasticsearch-setup
+    spec:
+      restartPolicy: OnFailure
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 100
+        runAsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: setup
+          image: curlimages/curl:8.23.0
+          command: [sh, /setup/setup.sh]
+          env:
+            - name: ELASTIC_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: elasticsearch-credentials, key: elastic-password }
+            - name: KIBANA_SYSTEM_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: elasticsearch-credentials, key: kibana-system-password }
+            - name: FLUENTBIT_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: elasticsearch-credentials, key: fluentbit-password }
+            - name: EXPORTER_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: elasticsearch-credentials, key: exporter-password }
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+            limits: { cpu: 100m, memory: 64Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: setup
+              mountPath: /setup
+      volumes:
+        - name: setup
+          configMap:
+            name: elasticsearch-setup

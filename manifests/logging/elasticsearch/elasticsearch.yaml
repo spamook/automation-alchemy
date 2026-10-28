@@ -1,0 +1,132 @@
+# Single-node Elasticsearch: stores and indexes every log line shipped by Fluent Bit.
+# Security is on: Kibana, Fluent Bit and the exporter log in with their own users
+# (created by setup-job.yaml), passwords come from the elasticsearch-credentials Secret.
+apiVersion: v1
+kind: Service
+metadata:
+  name: elasticsearch-headless
+  namespace: logging
+  labels:
+    app.kubernetes.io/name: elasticsearch
+spec:
+  # stable DNS name for the StatefulSet pod (elasticsearch-0.elasticsearch-headless)
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: elasticsearch
+  ports:
+    - name: http
+      port: 9200
+    - name: transport
+      port: 9300
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: elasticsearch
+  namespace: logging
+  labels:
+    app.kubernetes.io/name: elasticsearch
+spec:
+  selector:
+    app.kubernetes.io/name: elasticsearch
+  ports:
+    - name: http
+      port: 9200
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: elasticsearch
+  namespace: logging
+  labels:
+    app.kubernetes.io/name: elasticsearch
+spec:
+  serviceName: elasticsearch-headless
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: elasticsearch
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: elasticsearch
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        # the image's elasticsearch user; its files belong to group 0
+        runAsUser: 1000
+        runAsGroup: 0
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: elasticsearch
+          image: docker.elastic.co/elasticsearch/elasticsearch:9.5.5
+          env:
+            - name: cluster.name
+              value: k8s-logs
+            - name: discovery.type
+              value: single-node
+            - name: ES_JAVA_OPTS
+              value: -Xms512m -Xmx512m
+            - name: xpack.security.enabled
+              value: "true"
+            # plain HTTP inside the cluster; nothing outside can reach this Service
+            - name: xpack.security.http.ssl.enabled
+              value: "false"
+            - name: xpack.security.transport.ssl.enabled
+              value: "false"
+            - name: xpack.ml.enabled
+              value: "false"
+            - name: ingest.geoip.downloader.enabled
+              value: "false"
+            # no memory-mapped index files, so the node's vm.max_map_count needn't be raised
+            # (which would require a privileged init container)
+            - name: node.store.allow_mmap
+              value: "false"
+            # password of the built-in "elastic" superuser, applied on the first start
+            - name: ELASTIC_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: elasticsearch-credentials
+                  key: elastic-password
+          ports:
+            - name: http
+              containerPort: 9200
+            - name: transport
+              containerPort: 9300
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - curl -sf -u "elastic:$ELASTIC_PASSWORD" "http://localhost:9200/_cluster/health?local=true" >/dev/null
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 90
+            periodSeconds: 30
+          resources:
+            requests: { cpu: 250m, memory: 768Mi }
+            limits: { cpu: 1500m, memory: 1280Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: data
+              mountPath: /usr/share/elasticsearch/data
+  # claim "data-elasticsearch-0", bound to the elasticsearch-data volume (manifests/storage)
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        storageClassName: local-storage
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: 10Gi
