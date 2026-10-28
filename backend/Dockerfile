@@ -10,7 +10,9 @@ FROM node:24.19.0-alpine3.24 AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 COPY package*.json ./
-RUN npm ci --omit=dev && npm cache clean --force \
+# apk upgrade: Alpine security fixes released after the base image was built
+RUN apk upgrade --no-cache \
+    && npm ci --omit=dev && npm cache clean --force \
     # npm/corepack are only needed to install packages: dropping them shrinks the image
     # and removes their dependencies from the vulnerability scan
     && rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
