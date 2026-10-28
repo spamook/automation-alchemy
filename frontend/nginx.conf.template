@@ -1,19 +1,36 @@
+# One JSON line per request: Fluent Bit sends it to Elasticsearch as separate fields
+log_format json_access escape=json
+    '{"time":"$time_iso8601","remote_addr":"$remote_addr","method":"$request_method",'
+    '"path":"$request_uri","status":$status,"bytes":$body_bytes_sent,'
+    '"request_time":$request_time,"upstream_time":"$upstream_response_time",'
+    '"user_agent":"$http_user_agent"}';
+
 server {
-    listen 80;
+    listen 8080;
     root /usr/share/nginx/html;
     index index.html;
     gzip on;
     gzip_types text/plain text/css application/json application/javascript text/javascript;
 
+    access_log /dev/stdout json_access;
+
+    # Which replica answered — shows the load balancing between frontend pods
+    add_header X-Served-By $hostname always;
+
     location / {
         try_files $uri /index.html;
     }
 
-
     location /api/ {
-        proxy_pass       http://BACKEND_HOST:BACKEND_PORT/;
+        proxy_pass       http://${BACKEND_HOST}:${BACKEND_PORT}/;
         proxy_set_header Host             $http_host;
         proxy_set_header X-Real-IP        $remote_addr;
         proxy_set_header X-Forwarded-For  $proxy_add_x_forwarded_for;
+    }
+
+    # Liveness/readiness probes: no access log, they run every few seconds
+    location = /healthz {
+        access_log off;
+        return 200 "ok\n";
     }
 }
