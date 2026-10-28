@@ -1,0 +1,75 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: logging
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+---
+# Elasticsearch: only the log shipper, Kibana, the exporter and the setup Job
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: elasticsearch
+  namespace: logging
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: elasticsearch
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values: [fluent-bit, kibana, elasticsearch-exporter, elasticsearch-setup]
+      ports:
+        - port: 9200
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kibana
+  namespace: logging
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: kibana
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: kibana-setup
+      ports:
+        - port: 5601
+---
+# metrics endpoints, scraped by Prometheus
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: metrics
+  namespace: logging
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values: [fluent-bit, elasticsearch-exporter]
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - port: 2020
+        - port: 9114

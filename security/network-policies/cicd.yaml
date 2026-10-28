@@ -1,0 +1,61 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: jenkins
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+---
+# Jenkins UI through the ingress; build agents (same namespace) connect back over websocket
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: jenkins-controller
+  namespace: jenkins
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: jenkins
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: jenkins-agent
+      ports:
+        - port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: registry
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+---
+# Build agents push and scan images. The node pulls them too, which is always allowed.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: registry
+  namespace: registry
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: registry
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: jenkins
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: jenkins-agent
+      ports:
+        - port: 5000

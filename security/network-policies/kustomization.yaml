@@ -1,0 +1,9 @@
+# Optional hardening: kubectl apply -k security/network-policies
+# (needs a CNI that enforces NetworkPolicy — scripts/cluster-up.sh starts Minikube with Calico)
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - app.yaml
+  - cicd.yaml
+  - monitoring.yaml
+  - logging.yaml
