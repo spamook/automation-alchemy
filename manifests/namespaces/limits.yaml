@@ -1,0 +1,94 @@
+# Defaults for any container that comes without resources (e.g. a container added by a
+# tool), so nothing can run unbounded. Every manifest in this repo sets its own values.
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: container-defaults
+  namespace: app
+spec:
+  limits:
+    - type: Container
+      defaultRequest: { cpu: 50m, memory: 64Mi }
+      default: { cpu: 500m, memory: 256Mi }
+---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: container-defaults
+  namespace: registry
+spec:
+  limits:
+    - type: Container
+      defaultRequest: { cpu: 50m, memory: 64Mi }
+      default: { cpu: 500m, memory: 256Mi }
+---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: container-defaults
+  namespace: ingress
+spec:
+  limits:
+    - type: Container
+      defaultRequest: { cpu: 50m, memory: 64Mi }
+      default: { cpu: 500m, memory: 256Mi }
+---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: container-defaults
+  namespace: jenkins
+spec:
+  limits:
+    - type: Container
+      defaultRequest: { cpu: 100m, memory: 128Mi }
+      default: { cpu: "1", memory: 512Mi }
+---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: container-defaults
+  namespace: monitoring
+spec:
+  limits:
+    - type: Container
+      defaultRequest: { cpu: 50m, memory: 64Mi }
+      default: { cpu: 500m, memory: 256Mi }
+---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: container-defaults
+  namespace: logging
+spec:
+  limits:
+    - type: Container
+      defaultRequest: { cpu: 50m, memory: 64Mi }
+      default: { cpu: 500m, memory: 256Mi }
+---
+# Caps on the whole app namespace: covers the frontend HPA at its maximum (5 replicas)
+# plus the backend, and stops a runaway deployment from starving the node.
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: app-quota
+  namespace: app
+spec:
+  hard:
+    pods: "15"
+    requests.cpu: "1"
+    requests.memory: 1Gi
+    limits.cpu: "4"
+    limits.memory: 2Gi
+---
+# At most a few build agents at a time: each pipeline run is one pod
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: jenkins-quota
+  namespace: jenkins
+spec:
+  hard:
+    pods: "5"
+    requests.memory: 3Gi
+    limits.memory: 6Gi

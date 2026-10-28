@@ -1,0 +1,10 @@
+# Administrator-provisioned storage. There is no provisioner, so Kubernetes never creates
+# volumes on its own: a claim only binds to one of the PersistentVolumes in this folder.
+# WaitForFirstConsumer delays binding until a pod using the claim is scheduled.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: local-storage
+provisioner: kubernetes.io/no-provisioner
+volumeBindingMode: WaitForFirstConsumer
+reclaimPolicy: Retain

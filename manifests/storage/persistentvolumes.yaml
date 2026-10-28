@@ -1,0 +1,79 @@
+# Each volume is a directory on the Minikube node under /data (Minikube keeps /data across
+# VM restarts). scripts/cluster-up.sh creates the directories with the owner each app runs as;
+# type: Directory makes a pod fail loudly instead of writing into a fresh root-owned folder.
+#
+# claimRef reserves every volume for exactly one claim, so Prometheus can never end up
+# on the Jenkins volume. Retain: deleting a claim keeps the data on the node.
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: registry-data
+spec:
+  storageClassName: local-storage
+  capacity: { storage: 5Gi }
+  accessModes: [ReadWriteOnce]
+  persistentVolumeReclaimPolicy: Retain
+  claimRef: { namespace: registry, name: registry-data }
+  hostPath: { path: /data/registry, type: Directory }
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: jenkins-home
+spec:
+  storageClassName: local-storage
+  capacity: { storage: 5Gi }
+  accessModes: [ReadWriteOnce]
+  persistentVolumeReclaimPolicy: Retain
+  claimRef: { namespace: jenkins, name: jenkins-home }
+  hostPath: { path: /data/jenkins, type: Directory }
+---
+# Trivy's vulnerability database (~1 GB unpacked), shared by build agents between runs
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: trivy-cache
+spec:
+  storageClassName: local-storage
+  capacity: { storage: 2Gi }
+  accessModes: [ReadWriteOnce]
+  persistentVolumeReclaimPolicy: Retain
+  claimRef: { namespace: jenkins, name: trivy-cache }
+  hostPath: { path: /data/trivy-cache, type: Directory }
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: prometheus-data
+spec:
+  storageClassName: local-storage
+  capacity: { storage: 5Gi }
+  accessModes: [ReadWriteOnce]
+  persistentVolumeReclaimPolicy: Retain
+  claimRef: { namespace: monitoring, name: prometheus-data }
+  hostPath: { path: /data/prometheus, type: Directory }
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: grafana-data
+spec:
+  storageClassName: local-storage
+  capacity: { storage: 1Gi }
+  accessModes: [ReadWriteOnce]
+  persistentVolumeReclaimPolicy: Retain
+  claimRef: { namespace: monitoring, name: grafana-data }
+  hostPath: { path: /data/grafana, type: Directory }
+---
+# Claimed by the Elasticsearch StatefulSet's volumeClaimTemplate "data" (pod elasticsearch-0)
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: elasticsearch-data
+spec:
+  storageClassName: local-storage
+  capacity: { storage: 10Gi }
+  accessModes: [ReadWriteOnce]
+  persistentVolumeReclaimPolicy: Retain
+  claimRef: { namespace: logging, name: data-elasticsearch-0 }
+  hostPath: { path: /data/elasticsearch, type: Directory }

@@ -1,0 +1,55 @@
+# One namespace per concern. Pod Security Admission enforces the strictest level the
+# workloads of a namespace can live with; "audit: restricted" records anything that
+# would not pass the strictest level.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: app
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: registry
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+---
+# Traefik binds port 80 on the node (hostPort), which only the privileged level allows
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ingress
+  labels:
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/audit: restricted
+---
+# Kaniko must run as root to unpack image layers: baseline still forbids privileged
+# containers, host namespaces and hostPath volumes
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: jenkins
+  labels:
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/audit: restricted
+---
+# node-exporter reads the host's /proc and /sys and uses the host network
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
+  labels:
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/audit: restricted
+---
+# Fluent Bit reads container log files from the node (hostPath)
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: logging
+  labels:
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/audit: restricted
