@@ -40,6 +40,7 @@ spec:
               value: /kibana
             - name: SERVER_REWRITEBASEPATH
               value: "true"
+            # for the links Kibana generates; scripts/deploy.sh sets the real Minikube IP
             - name: SERVER_PUBLICBASEURL
               value: http://192.168.56.100/kibana
             # stable keys: sessions and saved objects stay valid across restarts
@@ -55,7 +56,7 @@ spec:
             - name: TELEMETRY_OPTIN
               value: "false"
             - name: NODE_OPTIONS
-              value: --max-old-space-size=1024
+              value: --max-old-space-size=768
           ports:
             - name: http
               containerPort: 5601
@@ -70,8 +71,8 @@ spec:
             initialDelaySeconds: 120
             periodSeconds: 30
           resources:
-            requests: { cpu: 100m, memory: 768Mi }
-            limits: { cpu: "1", memory: 1400Mi }
+            requests: { cpu: 100m, memory: 640Mi }
+            limits: { cpu: "1", memory: 1200Mi }
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
