@@ -91,20 +91,25 @@ groups:
         annotations:
           summary: "Elasticsearch cluster status is RED (some primary shards are not allocated)"
 
+      # absent(): the exporter itself is gone, so nobody watches Elasticsearch either
       - alert: ElasticsearchUnreachable
-        expr: max(elasticsearch_cluster_health_up) == 0 or absent(elasticsearch_cluster_health_up)
+        expr: max(elasticsearch_clusterinfo_up) == 0 or absent(elasticsearch_clusterinfo_up)
         for: 2m
         labels:
           severity: critical
         annotations:
           summary: "Elasticsearch does not answer the exporter's health checks"
 
+      # errors = rejected chunks, retries_failed = chunks dropped after the last retry,
+      # retries for 2 minutes in a row = Elasticsearch keeps refusing the logs
       - alert: FluentBitOutputErrors
         expr: |
           sum by (pod, name) (increase(fluentbit_output_errors_total[5m])) > 0
             or
           sum by (pod, name) (increase(fluentbit_output_retries_failed_total[5m])) > 0
-        for: 1m
+            or
+          sum by (pod, name) (increase(fluentbit_output_retries_total[5m])) > 0
+        for: 2m
         labels:
           severity: warning
         annotations:
