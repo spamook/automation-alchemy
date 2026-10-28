@@ -1,0 +1,90 @@
+# Fluent Bit pipeline: inputs -> filters -> outputs. Everything ends up in Elasticsearch
+# as daily indices k8s-logs-YYYY.MM.DD; the field log_source tells the three kinds apart.
+service:
+  flush: 2
+  log_level: info
+  # /api/v2/metrics/prometheus for Prometheus, /api/v1/health for the probes
+  http_server: on
+  http_listen: 0.0.0.0
+  http_port: 2020
+  health_check: on
+
+parsers:
+  # our apps log one JSON object per line; no time key, the container runtime's time is used
+  - name: app_json
+    format: json
+
+pipeline:
+  inputs:
+    # 1. stdout/stderr of every container (the runtime writes them to files on the node)
+    - name: tail
+      tag: kube.*
+      path: /var/log/containers/*.log
+      # its own log would loop back into itself when Elasticsearch is down
+      exclude_path: /var/log/containers/fluent-bit-*.log
+      multiline.parser: cri, docker
+      db: /var/fluent-bit/state/containers.db
+      mem_buf_limit: 10MB
+      skip_long_lines: on
+      refresh_interval: 10
+
+    # 2. system logs of the node: kubelet, containerd, systemd, ... (journald)
+    - name: systemd
+      tag: node.*
+      path: /run/log/journal
+      read_from_tail: on
+      strip_underscores: on
+      lowercase: on
+      db: /var/fluent-bit/state/journal.db
+
+    # 3. Kubernetes events: scheduling, image pulls, OOM kills, failed probes, ...
+    - name: kubernetes_events
+      tag: k8s_events
+      kube_url: https://kubernetes.default.svc
+      db: /var/fluent-bit/state/events.db
+
+  filters:
+    # adds namespace, pod, container, labels to every container log line
+    - name: kubernetes
+      match: kube.*
+      kube_tag_prefix: kube.var.log.containers.
+      merge_log: off
+      keep_log: on
+      labels: on
+      annotations: off
+
+    # JSON logs of our own apps (namespace "app") become searchable fields:
+    # level, status, path, durationMs (backend), request_time (nginx), ...
+    - name: parser
+      match: kube.var.log.containers.*_app_*
+      key_name: log
+      parser: app_json
+      reserve_data: on
+      preserve_key: on
+
+    - name: modify
+      match: kube.*
+      add: log_source container
+    - name: modify
+      match: node.*
+      add: log_source node
+    - name: modify
+      match: k8s_events
+      add: log_source event
+
+  outputs:
+    - name: es
+      match: "*"
+      host: elasticsearch.logging.svc.cluster.local
+      port: 9200
+      http_user: fluentbit
+      http_passwd: ${FLUENTBIT_ES_PASSWORD}
+      logstash_format: on
+      logstash_prefix: k8s-logs
+      suppress_type_name: on
+      # label keys like app.kubernetes.io/name would otherwise be read as nested objects
+      replace_dots: on
+      # print the reason when Elasticsearch rejects a document
+      trace_error: on
+      buffer_size: 1MB
+      retry_limit: 5
