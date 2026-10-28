@@ -1,0 +1,25 @@
+# Alertmanager receives firing alerts from Prometheus, groups them, silences duplicates
+# and sends notifications to the receivers.
+route:
+  receiver: alert-receiver
+  # one notification per alert name and namespace, not one per pod
+  group_by: [alertname, namespace]
+  group_wait: 30s
+  group_interval: 2m
+  repeat_interval: 2h
+
+receivers:
+  # small webhook service in this namespace (manifests/monitoring/alert-receiver): prints
+  # every notification to its log (-> Kibana) and can forward it to Slack/Discord
+  - name: alert-receiver
+    webhook_configs:
+      - url: http://alert-receiver.monitoring.svc.cluster.local:9095/alertmanager
+        send_resolved: true
+
+inhibit_rules:
+  # without the API server kube-state-metrics data is stale: don't report pod alerts too
+  - source_matchers: [alertname = KubeAPIServerDown]
+    target_matchers: [alertname =~ "Pod.+|Container.+"]
+  # red already says everything yellow would
+  - source_matchers: [alertname = ElasticsearchClusterRed]
+    target_matchers: [alertname = ElasticsearchClusterYellow]
