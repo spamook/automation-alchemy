@@ -131,7 +131,8 @@ The VM has 7 GB; Minikube's OS lives in RAM (~1.2 GB), so the platform must fit 
 | Kibana (needs 1 GB heap for its first start) | ~600–900 MB |
 | Jenkins (512 MB heap) | ~650 MB |
 | Kubernetes control plane + Calico | ~600 MB |
-| Grafana, Prometheus | ~100–250 MB each |
+| Grafana | ~350 MB |
+| Prometheus | ~100–250 MB |
 | everything else | < 30 MB each |
 | a running build agent | +0.5–1.3 GB while it runs |
 
@@ -146,7 +147,10 @@ The VM has 7 GB; Minikube's OS lives in RAM (~1.2 GB), so the platform must fit 
 | Elasticsearch and Kibana stuck in `ImagePullBackOff` | the version taken from Elastic's artifacts API (9.5.6) had no published image yet | checked the registry's tag list, pinned 9.5.5 |
 | Kibana crash-looping | Kibana 9 runs out of a 512 MB heap during its first-start migrations | 1 GB heap, 1.4 GiB limit |
 | StatefulSet kept the broken pod after the image fix | StatefulSets don't replace a pod that never became ready | deleted the pod once |
+| `ElasticsearchUnreachable` kept firing with a healthy cluster | elasticsearch-exporter 1.11 no longer has `elasticsearch_cluster_health_up`, so `absent()` was always true | alert on `elasticsearch_clusterinfo_up` |
+| `ContainerMemoryNearLimit` fired for Grafana | Grafana 13 needs ~350 MB, its limit was 384 MiB | limit raised to 512 MiB |
 
-The monitoring caught the problems above on its own: `ElasticsearchUnreachable`,
-`PodPendingTooLong` (pods waiting for images), `FluentBitOutputErrors` (nowhere to send logs)
-and `PodRestartingTooOften` (Kibana) all fired and resolved when the problems were fixed.
+The monitoring caught several of these on its own: `ElasticsearchUnreachable`,
+`PodPendingTooLong` (pods waiting for images), `FluentBitOutputErrors` (nowhere to send logs),
+`PodRestartingTooOften` (Kibana) and `ContainerMemoryNearLimit` (Grafana) fired before anyone
+looked, and resolved once the problems were fixed.
