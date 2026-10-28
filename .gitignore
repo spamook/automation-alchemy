@@ -3,6 +3,9 @@ dist/
 .env
 *.log
 .DS_Store
+# generated passwords (scripts/create-secrets.sh)
+.secrets/
+# local leftovers of the VM-based version (see the vm-infrastructure tag)
 ansible/files/jenkins_key
 ansible/group_vars/all.yml
 .vagrant/
