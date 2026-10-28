@@ -1,0 +1,59 @@
+# Jenkins Configuration as Code: the whole controller setup lives here, so a fresh
+# Jenkins (or a wiped volume) comes back identical, without the setup wizard.
+# ${VARS} come from the pod's environment (Secret jenkins-admin, ConfigMap jenkins-env).
+jenkins:
+  systemMessage: "Cluster Chronicles CI/CD: every build runs in its own pod in the jenkins namespace."
+  # nothing is built on the controller itself
+  numExecutors: 0
+  securityRealm:
+    local:
+      allowsSignup: false
+      users:
+        - id: admin
+          password: "${JENKINS_ADMIN_PASSWORD}"
+  authorizationStrategy:
+    loggedInUsersCanDoAnything:
+      allowAnonymousRead: false
+  clouds:
+    - kubernetes:
+        name: kubernetes
+        # empty serverUrl = the in-cluster API with the controller's service account
+        namespace: jenkins
+        jenkinsUrl: "http://jenkins.jenkins.svc.cluster.local:8080/jenkins/"
+        # agents connect back over the normal HTTP port, no separate JNLP port needed
+        webSocket: true
+        containerCapStr: "2"
+        podRetention: never
+
+unclassified:
+  location:
+    url: "${JENKINS_PUBLIC_URL}"
+
+jobs:
+  - script: >
+      pipelineJob('infra-insight') {
+        description('Builds the backend and frontend images, scans them with Trivy and deploys them to the app namespace.')
+        properties {
+          pipelineTriggers {
+            triggers {
+              pollSCM {
+                scmpoll_spec('H/2 * * * *')
+              }
+            }
+          }
+        }
+        definition {
+          cpsScm {
+            scm {
+              git {
+                remote {
+                  url('${GIT_REPO_URL}')
+                }
+                branch('*/${GIT_BRANCH}')
+              }
+            }
+            scriptPath('cicd/Jenkinsfile')
+            lightweight(true)
+          }
+        }
+      }

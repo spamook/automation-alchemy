@@ -1,0 +1,149 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: jenkins-home
+  namespace: jenkins
+spec:
+  storageClassName: local-storage
+  volumeName: jenkins-home
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 5Gi
+---
+# Trivy vulnerability database, mounted into every build agent (cicd/agent-pod.yaml)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: trivy-cache
+  namespace: jenkins
+spec:
+  storageClassName: local-storage
+  volumeName: trivy-cache
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jenkins
+  namespace: jenkins
+  labels:
+    app.kubernetes.io/name: jenkins
+spec:
+  replicas: 1
+  # ReadWriteOnce home volume: the old pod has to stop before the new one starts
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: jenkins
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: jenkins
+    spec:
+      serviceAccountName: jenkins
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: jenkins
+          # our image with the plugins baked in (cicd/jenkins/Dockerfile)
+          image: jenkins
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: JAVA_OPTS
+              value: -Xms256m -Xmx512m -Djenkins.install.runSetupWizard=false
+            # served under /jenkins so one ingress host can carry every tool
+            - name: JENKINS_OPTS
+              value: --prefix=/jenkins
+            - name: CASC_JENKINS_CONFIG
+              value: /var/jenkins_casc/jenkins.yaml
+            - name: JENKINS_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: jenkins-admin
+                  key: password
+          envFrom:
+            - configMapRef:
+                name: jenkins-env
+          ports:
+            - name: http
+              containerPort: 8080
+          # first start unpacks the war and loads the plugins: give it up to 6 minutes
+          startupProbe:
+            httpGet: { path: /jenkins/login, port: http }
+            periodSeconds: 10
+            failureThreshold: 36
+          readinessProbe:
+            httpGet: { path: /jenkins/login, port: http }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /jenkins/login, port: http }
+            periodSeconds: 30
+            failureThreshold: 5
+          resources:
+            requests: { cpu: 200m, memory: 768Mi }
+            limits: { cpu: 1500m, memory: 1280Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: home
+              mountPath: /var/jenkins_home
+            - name: casc
+              mountPath: /var/jenkins_casc
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: home
+          persistentVolumeClaim:
+            claimName: jenkins-home
+        - name: casc
+          configMap:
+            name: jenkins-casc
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: jenkins
+  namespace: jenkins
+  labels:
+    app.kubernetes.io/name: jenkins
+spec:
+  selector:
+    app.kubernetes.io/name: jenkins
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: jenkins
+  namespace: jenkins
+spec:
+  ingressClassName: traefik
+  rules:
+    - http:
+        paths:
+          - path: /jenkins
+            pathType: Prefix
+            backend:
+              service:
+                name: jenkins
+                port:
+                  name: http

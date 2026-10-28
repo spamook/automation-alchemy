@@ -1,0 +1,23 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - rbac.yaml
+  - jenkins.yaml
+
+configMapGenerator:
+  - name: jenkins-casc
+    namespace: jenkins
+    files:
+      - jenkins.yaml=jenkins-casc.yaml
+  - name: jenkins-env
+    namespace: jenkins
+    literals:
+      # the pipeline job polls this repository for new commits
+      - GIT_REPO_URL=https://github.com/spamook/automation-alchemy.git
+      - GIT_BRANCH=master
+      - JENKINS_PUBLIC_URL=http://192.168.56.100/jenkins/
+
+images:
+  - name: jenkins
+    newName: 10.96.0.50/jenkins
+    newTag: initial
