@@ -1,0 +1,122 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kibana
+  namespace: logging
+  labels:
+    app.kubernetes.io/name: kibana
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kibana
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kibana
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 0
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: kibana
+          image: docker.elastic.co/kibana/kibana:9.5.5
+          env:
+            - name: ELASTICSEARCH_HOSTS
+              value: http://elasticsearch.logging.svc.cluster.local:9200
+            # Kibana's own service user; people log in to Kibana as "elastic"
+            - name: ELASTICSEARCH_USERNAME
+              value: kibana_system
+            - name: ELASTICSEARCH_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: elasticsearch-credentials, key: kibana-system-password }
+            # served under /kibana behind the ingress
+            - name: SERVER_BASEPATH
+              value: /kibana
+            - name: SERVER_REWRITEBASEPATH
+              value: "true"
+            - name: SERVER_PUBLICBASEURL
+              value: http://192.168.56.100/kibana
+            # stable keys: sessions and saved objects stay valid across restarts
+            - name: XPACK_SECURITY_ENCRYPTIONKEY
+              valueFrom:
+                secretKeyRef: { name: elasticsearch-credentials, key: kibana-encryption-key }
+            - name: XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY
+              valueFrom:
+                secretKeyRef: { name: elasticsearch-credentials, key: kibana-encryption-key }
+            - name: XPACK_REPORTING_ENCRYPTIONKEY
+              valueFrom:
+                secretKeyRef: { name: elasticsearch-credentials, key: kibana-encryption-key }
+            - name: TELEMETRY_OPTIN
+              value: "false"
+            - name: NODE_OPTIONS
+              value: --max-old-space-size=1024
+          ports:
+            - name: http
+              containerPort: 5601
+          # the login page only answers once Kibana is connected to Elasticsearch
+          readinessProbe:
+            httpGet: { path: /kibana/login, port: http }
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 120
+            periodSeconds: 30
+          resources:
+            requests: { cpu: 100m, memory: 768Mi }
+            limits: { cpu: "1", memory: 1400Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: data
+              mountPath: /usr/share/kibana/data
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: data
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kibana
+  namespace: logging
+  labels:
+    app.kubernetes.io/name: kibana
+spec:
+  selector:
+    app.kubernetes.io/name: kibana
+  ports:
+    - name: http
+      port: 5601
+      targetPort: http
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: kibana
+  namespace: logging
+spec:
+  ingressClassName: traefik
+  rules:
+    - http:
+        paths:
+          - path: /kibana
+            pathType: Prefix
+            backend:
+              service:
+                name: kibana
+                port:
+                  name: http

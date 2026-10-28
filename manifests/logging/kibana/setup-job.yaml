@@ -1,0 +1,46 @@
+# Imports the Kibana dashboards once Kibana is up (scripts/deploy.sh re-runs it on changes)
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kibana-setup
+  namespace: logging
+spec:
+  backoffLimit: 10
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kibana-setup
+    spec:
+      restartPolicy: OnFailure
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 100
+        runAsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: setup
+          image: curlimages/curl:8.23.0
+          command: [sh, /setup/setup.sh]
+          env:
+            - name: ELASTIC_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: elasticsearch-credentials, key: elastic-password }
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+            limits: { cpu: 100m, memory: 64Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: setup
+              mountPath: /setup
+      volumes:
+        - name: setup
+          configMap:
+            name: kibana-setup
