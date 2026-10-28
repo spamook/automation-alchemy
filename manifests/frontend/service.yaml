@@ -1,0 +1,16 @@
+# Load balancing for the frontend replicas: the Service spreads connections over every
+# ready pod; Traefik (ingress.yaml) balances requests over the same endpoints.
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend
+  namespace: app
+  labels:
+    app.kubernetes.io/name: frontend
+spec:
+  selector:
+    app.kubernetes.io/name: frontend
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

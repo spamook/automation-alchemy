@@ -1,0 +1,20 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - deployment.yaml
+  - service.yaml
+
+# A changed value gets a new ConfigMap name (hash suffix), which rolls the pods automatically
+configMapGenerator:
+  - name: backend-config
+    namespace: app
+    literals:
+      - NODE_ENV=production
+      - PORT=3001
+      - LOG_LEVEL=info
+
+# "initial" is built by scripts/deploy.sh; the pipeline deploys its own tags over it
+images:
+  - name: backend
+    newName: 10.96.0.50/backend
+    newTag: initial

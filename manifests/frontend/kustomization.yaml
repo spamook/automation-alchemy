@@ -1,0 +1,20 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - deployment.yaml
+  - service.yaml
+  - ingress.yaml
+  - hpa.yaml
+  - pdb.yaml
+
+configMapGenerator:
+  - name: frontend-config
+    namespace: app
+    literals:
+      - BACKEND_HOST=backend.app.svc.cluster.local
+      - BACKEND_PORT=3001
+
+images:
+  - name: frontend
+    newName: 10.96.0.50/frontend
+    newTag: initial

@@ -1,0 +1,15 @@
+# Stable name and IP for the backend: the frontend's nginx proxies /api/ to backend:3001
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend
+  namespace: app
+  labels:
+    app.kubernetes.io/name: backend
+spec:
+  selector:
+    app.kubernetes.io/name: backend
+  ports:
+    - name: http
+      port: 3001
+      targetPort: http
