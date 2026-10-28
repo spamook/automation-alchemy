@@ -151,6 +151,7 @@ The VM has 7 GB; Minikube's OS lives in RAM (~1.2 GB), so the platform must fit 
 | `ContainerMemoryNearLimit` fired for Grafana | Grafana 13 needs ~350 MB, its limit was 384 MiB | limit raised to 512 MiB |
 | `ContainerMemoryNearLimit` fired for Elasticsearch | ~1 GB in use with a 512 MB heap, the limit was 1.25 GiB | limit raised to 1.5 GiB |
 | a fresh `scripts/deploy.sh` stopped right after "all manifests" | reading the current image tag failed on a cluster without the app, and `set -e` ended the script | the lookup is allowed to come back empty; found by running everything from scratch |
+| on the fresh cluster today's log index was yellow, with text instead of keyword fields | the setup Job created Fluent Bit's user before the index template, so Fluent Bit created the index with default settings | the template is created first; Fluent Bit can't write before its user exists |
 | the new VM got `192.168.56.101` instead of `.100` | VirtualBox's DHCP still held the lease of the deleted VM | links in Jenkins, Kibana and Alertmanager use the address `deploy.sh` reads from `minikube ip` |
 
 The monitoring caught several of these on its own: `ElasticsearchUnreachable`,
