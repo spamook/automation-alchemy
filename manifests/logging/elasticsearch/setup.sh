@@ -10,6 +10,19 @@ es() { curl -sS --fail-with-body -u "$AUTH" -H 'Content-Type: application/json' 
 echo "waiting for elasticsearch..."
 until curl -sf -u "$AUTH" "$ES/_cluster/health?timeout=5s" >/dev/null; do sleep 5; done
 
+# Template first: Fluent Bit can only write once its user exists, so its first index is
+# always created with the right mappings and no replicas.
+echo "== lifecycle policy: log indices are deleted after 7 days"
+es -X PUT "$ES/_ilm/policy/k8s-logs" -d '{
+  "policy": {"phases": {"hot": {"actions": {}}, "delete": {"min_age": "7d", "actions": {"delete": {}}}}}
+}'
+
+echo "== index template for k8s-logs-*"
+es -X PUT "$ES/_index_template/k8s-logs" -d @/setup/index-template.json
+
+echo "== existing log indices: no replicas (one node can't hold them)"
+es -X PUT "$ES/k8s-logs-*/_settings?allow_no_indices=true" -d '{"index": {"number_of_replicas": 0}}'
+
 echo "== password of kibana_system (the user Kibana connects with)"
 es -X POST "$ES/_security/user/kibana_system/_password" -d "{\"password\":\"${KIBANA_SYSTEM_PASSWORD}\"}"
 
@@ -26,13 +39,5 @@ es -X PUT "$ES/_security/role/metrics_reader" -d '{
   "indices": [{"names": ["*"], "privileges": ["monitor"]}]
 }'
 es -X PUT "$ES/_security/user/es-exporter" -d "{\"password\":\"${EXPORTER_PASSWORD}\",\"roles\":[\"metrics_reader\"]}"
-
-echo "== lifecycle policy: log indices are deleted after 7 days"
-es -X PUT "$ES/_ilm/policy/k8s-logs" -d '{
-  "policy": {"phases": {"hot": {"actions": {}}, "delete": {"min_age": "7d", "actions": {"delete": {}}}}}
-}'
-
-echo "== index template for k8s-logs-*"
-es -X PUT "$ES/_index_template/k8s-logs" -d @/setup/index-template.json
 
 echo "done"
