@@ -1,0 +1,19 @@
+# Provisioned at startup: Grafana talks to Prometheus and Alertmanager inside the cluster
+apiVersion: 1
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus.monitoring.svc:9090/prometheus
+    isDefault: true
+    jsonData:
+      timeInterval: 15s
+  - name: Alertmanager
+    uid: alertmanager
+    type: alertmanager
+    access: proxy
+    url: http://alertmanager.monitoring.svc:9093/alertmanager
+    jsonData:
+      implementation: prometheus
+      handleGrafanaManagedAlerts: false
