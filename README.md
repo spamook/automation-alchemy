@@ -1,517 +1,389 @@
-# Sherlock Logs
+# Cluster Chronicles
 
-Centralized **monitoring, logging and alerting** for the Automation Alchemy infrastructure: a full-stack infrastructure monitoring application with fully automated provisioning, configuration management and CI/CD pipeline, now observed by Prometheus + Grafana and the ELK stack.
+The **infra-insight** app (a Node.js API and a React dashboard) and everything around it —
+image registry, CI/CD, monitoring, logging and alerting — moved from seven virtual machines
+to a **Kubernetes** cluster (Minikube). Every piece is plain Kubernetes manifests: no Helm,
+no operators, nothing configured by hand.
 
-7 virtual machines, network configuration, security hardening, application deployment, CI/CD, Prometheus + Grafana metrics, ELK logs and alerts — created with a single command.
+| | |
+|---|---|
+| **App** | backend (1 replica) + frontend (2 replicas, autoscaled to 5) behind a Traefik ingress |
+| **CI/CD** | Jenkins in the cluster; each build is a pod: test → Kaniko build → Trivy scan → deploy → smoke test |
+| **Monitoring** | Prometheus, Alertmanager, Grafana (3 dashboards), kube-state-metrics, node-exporter |
+| **Logging** | EFK: Elasticsearch, Fluent Bit (container, node and event logs), Kibana (3 dashboards) |
+| **Alerting** | 12 Prometheus rules → Alertmanager → webhook receiver (optionally Slack / Discord) |
+| **Storage** | administrator-provisioned PersistentVolumes for the registry, Jenkins, Trivy, Prometheus, Grafana, Elasticsearch |
+| **Security** | Pod Security Admission per namespace, non-root read-only containers, least-privilege RBAC, Secrets, NetworkPolicies |
 
 ---
 
-## Quick Start
+## Quick start
+
+**Requirements**
+
+- [VirtualBox](https://www.virtualbox.org/) 7.x, [Minikube](https://minikube.sigs.k8s.io/) 1.38+,
+  [kubectl](https://kubernetes.io/docs/tasks/tools/) 1.34+
+- bash — on Windows use Git Bash
+- ~8 GB free RAM (the VM gets 7 GB), ~25 GB free disk, internet access
 
 ```bash
-git clone https://gitea.kood.tech/danilakargajev/sherlock-logs.git
-cd sherlock-logs
-ssh-keygen -t ed25519 -f ansible/files/jenkins_key -N ""
-vagrant up
+git clone https://github.com/spamook/automation-alchemy.git
+cd automation-alchemy
+
+scripts/cluster-up.sh    # creates the Minikube VM (~5 min the first time)
+scripts/deploy.sh        # builds the bootstrap images, applies everything (~15 min the first time)
+scripts/verify.sh        # checks every part end to end
+scripts/info.sh          # prints the URLs and logins again
 ```
 
-The application will be available at `http://192.168.56.10` after provisioning completes (15–30 minutes).
+Everything is reachable on the Minikube IP (`minikube ip`, usually `192.168.56.100`):
 
-Monitoring (from the host browser):
+| URL | What | Login |
+|---|---|---|
+| `http://<ip>/` | the app | – |
+| `http://<ip>/jenkins/` | Jenkins | `admin` |
+| `http://<ip>/grafana/` | Grafana | `admin` |
+| `http://<ip>/kibana/` | Kibana | `elastic` |
+| `http://<ip>/prometheus/` | Prometheus | `ops` (basic auth at the ingress) |
+| `http://<ip>/alertmanager/` | Alertmanager | `ops` (basic auth at the ingress) |
 
-| Tool | URL | Login |
-|------|-----|-------|
-| Grafana — metrics dashboards & alerts | http://192.168.56.16:3000 | `admin` / `admin` |
-| Kibana — log search & dashboards | http://192.168.56.16:5601 | – |
-| Prometheus — targets, raw queries | http://192.168.56.16:9090 | – |
+Passwords are generated on the first deploy into `.secrets/credentials.env` (ignored by git)
+and stored in the cluster as Kubernetes Secrets; `scripts/info.sh` prints them.
 
----
-
-## Requirements
-
-- [Vagrant](https://www.vagrantup.com/) 2.3+
-- [VirtualBox](https://www.virtualbox.org/) 7.0+
-- ~10 GB free RAM — all 7 VMs together use ~9.3 GB, so a 16 GB host works with browsers/games closed
-- Hardware virtualization (AMD-V / VT-x) enabled in BIOS; on Windows the Hyper-V hypervisor should be off (see [Troubleshooting](#troubleshooting-the-host)), otherwise VirtualBox falls back to a much slower mode
-- 40 GB free disk space
+Right after the deploy Jenkins finds no previous build, so its first SCM poll starts the
+pipeline on its own: about five minutes later the app runs images built by the pipeline.
 
 ---
 
 ## Architecture
 
+```mermaid
+flowchart LR
+    user([Browser]) -->|":80"| traefik
+
+    subgraph ingress [ns ingress]
+        traefik[Traefik]
+    end
+    subgraph app [ns app]
+        fe[frontend x2-5<br/>nginx] --> be[backend<br/>Node.js]
+    end
+    subgraph registry [ns registry]
+        reg[(registry)]
+    end
+    subgraph jenkins [ns jenkins]
+        jc[Jenkins] -->|creates| agent[build agent pod<br/>node · kaniko · trivy · kubectl]
+    end
+    subgraph monitoring [ns monitoring]
+        prom[Prometheus] --> am[Alertmanager] --> rcv[alert-receiver]
+        graf[Grafana] --> prom
+        ksm[kube-state-metrics]
+        ne[node-exporter]
+    end
+    subgraph logging [ns logging]
+        fb[Fluent Bit] --> es[(Elasticsearch)]
+        kib[Kibana] --> es
+        exp[es-exporter] --> es
+    end
+
+    traefik --> fe
+    traefik --> jc & graf & kib & prom & am
+    agent -->|push| reg
+    agent -->|kubectl apply| app
+    reg -.->|pull| app
+    prom -.->|scrape| be & traefik & ksm & ne & fb & exp
 ```
-[Browser]
-    |
-    v
-[Load Balancer]   192.168.56.10  nginx + adaptive load balancing
-    |
-    +-----------> [Web Server 1]  192.168.56.11  frontend + metrics sidecar
-    +-----------> [Web Server 2]  192.168.56.12  frontend + metrics sidecar
-                        |
-                        v
-                 [App Server]     192.168.56.13  backend API (Node.js/Express)
 
-[CI Server]      192.168.56.15  Jenkins + Docker private registry
-[Backup Server]  192.168.56.14  weekly rsync backups
+| Namespace | Pod Security level | Contents |
+|---|---|---|
+| `app` | restricted | backend, frontend, HPA, PodDisruptionBudget |
+| `registry` | restricted | private image registry (fixed ClusterIP `10.96.0.50`) |
+| `ingress` | privileged (hostPort 80) | Traefik ingress controller |
+| `jenkins` | baseline (Kaniko runs as root) | Jenkins controller and its build agent pods |
+| `monitoring` | privileged (node-exporter reads the host) | Prometheus, Alertmanager, alert-receiver, Grafana, kube-state-metrics, node-exporter |
+| `logging` | privileged (Fluent Bit reads node log files) | Elasticsearch, Fluent Bit, Kibana, elasticsearch-exporter |
 
-[Monitoring Server] 192.168.56.16  Prometheus, Grafana, Elasticsearch x2, Logstash, Kibana
-        ^   scrapes node-exporter / cAdvisor / backend metrics on every VM (pull)
-        +-- receives logs from Filebeat on every VM (push)
-```
-
-| VM | IP | RAM | Role |
-|----|----|-----|------|
-| load-balancer | 192.168.56.10 | 640 MB | nginx reverse proxy, adaptive load balancing |
-| web-server-1 | 192.168.56.11 | 640 MB | frontend container, metrics sidecar |
-| web-server-2 | 192.168.56.12 | 640 MB | frontend container, metrics sidecar |
-| app-server | 192.168.56.13 | 768 MB | backend API container |
-| backup-server | 192.168.56.14 | 640 MB | scheduled rsync backups |
-| ci-server | 192.168.56.15 | 1.5 GB | Jenkins CI/CD, Docker registry |
-| monitoring-server | 192.168.56.16 | 4.5 GB | Prometheus, Grafana, Elasticsearch (2 nodes), Logstash, Kibana |
-
-Every VM also runs the monitoring agents: **node-exporter** (host metrics), **cAdvisor** (container metrics) and **Filebeat** (logs).
+Routing is by path on one address, so no DNS or hosts-file entries are needed: Traefik sends
+`/jenkins`, `/grafana`, `/kibana`, `/prometheus` and `/alertmanager` to the tools (each runs
+with that path as its base URL) and everything else to the frontend.
 
 ---
 
-## Technology Stack
+## Project structure
 
-| Layer | Technology |
-|-------|-----------|
-| Backend | Node.js 20, Express 5, TypeScript |
-| Frontend | Vite, TypeScript, Tailwind CSS |
-| Containers | Docker, Docker Compose v2 |
-| Load Balancer | nginx |
-| Infrastructure | Vagrant, VirtualBox |
-| Configuration Management | Ansible |
-| CI/CD | Jenkins |
-| Backup | rsync, cron |
-| Metrics & alerting | Prometheus, Grafana, node-exporter, cAdvisor, prom-client |
-| Logging | Filebeat, Logstash, Elasticsearch, Kibana (ELK), winston |
+```
+.
+├── backend/                  Node.js API (Express, prom-client, JSON logs)
+├── frontend/                 React dashboard, served by unprivileged nginx
+├── manifests/                everything that runs in the cluster (kubectl apply -k manifests)
+│   ├── namespaces/           namespaces + Pod Security labels, LimitRanges, ResourceQuotas
+│   ├── storage/              StorageClass and PersistentVolumes
+│   ├── registry/             private image registry + its PVC
+│   ├── ingress/              Traefik: RBAC, IngressClass, basic-auth middleware
+│   ├── backend/              Deployment, Service, ConfigMap
+│   ├── frontend/             Deployment, Service, Ingress, HPA, PodDisruptionBudget
+│   ├── cicd/                 Jenkins: RBAC, PVCs, Configuration as Code, Deployment, Ingress
+│   ├── monitoring/           prometheus/, alertmanager/, alert-receiver/, grafana/,
+│   │                         kube-state-metrics/, node-exporter/
+│   └── logging/              elasticsearch/, fluent-bit/, kibana/, es-exporter/
+├── cicd/
+│   ├── Jenkinsfile           the pipeline
+│   ├── agent-pod.yaml        pod template of the build agents
+│   ├── jenkins/              Jenkins image with its plugins
+│   └── tools/                kubectl + curl image for deploy and smoke test
+├── security/
+│   ├── README.md             security measures and where they live
+│   └── network-policies/     optional NetworkPolicies (bonus)
+├── scripts/                  cluster-up, deploy, verify, load test, alert simulation, ...
+└── docs/
+    └── DESIGN.md             design decisions and the problems met on the way
+```
+
+Every component directory is a [Kustomize](https://kustomize.io/) base (built into kubectl):
+configuration files live next to the manifests and are turned into ConfigMaps with a hash
+suffix, so changing e.g. `prometheus.yml` and re-applying restarts Prometheus automatically.
 
 ---
 
-## Project Structure
+## Application
 
-```
-sherlock-logs/
-├── Vagrantfile                    # 7 VM definitions with ansible_local provisioner
-├── Jenkinsfile                    # CI/CD pipeline (Build > Push > Deploy > Monitoring > Smoke Test)
-├── Jenkinsfile.rollback           # Parameterized rollback pipeline
-│
-├── ansible/
-│   ├── site.yml                   # Main playbook — assigns roles by hostname
-│   ├── ansible.cfg                # Ansible settings (roles_path, no host key check)
-│   ├── inventory.ini              # localhost with ansible_connection=local
-│   ├── files/
-│   │   └── jenkins_key.pub        # Jenkins SSH public key (distributed to all VMs)
-│   └── roles/
-│       ├── common/                # Base packages, devops user, SSH hardening, UFW, /etc/hosts
-│       ├── docker/                # Docker CE, docker-compose, insecure registry config
-│       ├── app-server/            # Firewall rules, backend container deployment
-│       ├── web-server/            # Firewall rules, frontend + sidecar deployment
-│       ├── load-balancer/         # nginx, adaptive_lb.sh, cron every minute
-│       ├── backup-server/         # backup.sh, restore.sh, cron every Sunday
-│       ├── ci-server/             # Jenkins, Docker registry, SSH deploy key, notifications log
-│       ├── monitoring-server/     # Prometheus/Grafana/ELK stack on monitoring-server
-│       └── monitoring-agents/     # node-exporter, cAdvisor, Filebeat on every VM
-│
-├── backend/
-│   ├── src/                       # Express API source (TypeScript), prometheus.ts + logger.ts
-│   └── Dockerfile                 # Multi-stage build (builder + runner)
-│
-├── frontend/
-│   ├── src/                       # Vite + TypeScript + Tailwind source
-│   └── Dockerfile
-│
-├── load-balancer/
-│   ├── nginx.conf                 # Initial config deployed by Ansible to /etc/nginx/conf.d/lb.conf
-│   └── nginx.conf.template        # Template with WEB1_WEIGHT / WEB2_WEIGHT placeholders
-│
-├── scripts/
-│   ├── adaptive_lb.sh             # Adaptive load balancing algorithm
-│   ├── backup.sh                  # rsync backup over SSH
-│   ├── restore.sh                 # Restore from backup archive
-│   └── simulate-alerts.sh         # Triggers every alert condition for testing
-│
-├── monitoring/
-│   ├── docker-compose.yml         # Monitoring server stack
-│   ├── prometheus/                # prometheus.yml + scrape targets
-│   ├── grafana/                   # provisioned data sources, dashboards, alert rules
-│   ├── logstash/                  # Logstash pipeline (parsing + log alerts)
-│   ├── setup/                     # Elasticsearch ILM/templates, Kibana dashboards
-│   ├── alert-receiver/            # Webhook receiver for alert notifications
-│   └── agents/                    # node-exporter + cAdvisor + Filebeat (every VM)
-│
-├── docs/
-│   └── MONITORING.md              # Monitoring & logging in depth + Q&A
-│
-├── docker-compose.backend.yml
-├── docker-compose.frontend.yml
-└── docker-compose.sidecar.yml
-```
+| | backend | frontend |
+|---|---|---|
+| Replicas | 1 | 2 (HPA: 2–5 at 50% CPU) |
+| Image | `10.96.0.50/backend:<tag>` | `10.96.0.50/frontend:<tag>` |
+| Port | 3001 | 8080 (nginx-unprivileged) |
+| Requests / limits | 50m, 96Mi / 500m, 256Mi | 50m, 32Mi / 250m, 96Mi |
+| Probes | `GET /health` | `GET /healthz` |
+| Config | ConfigMap `backend-config` | ConfigMap `frontend-config` (backend address) |
+| Runs as | uid 1000, read-only root FS | uid 101, read-only root FS |
 
----
+- **Internal communication**: the frontend's nginx proxies `/api/` to the backend's Service
+  (`backend.app.svc.cluster.local:3001`); the address comes from a ConfigMap.
+- **Load balancing**: the `frontend` Service spreads traffic over every ready replica, Traefik
+  balances requests over the same endpoints. Every response carries `X-Served-By: <pod>`:
 
-## Ansible Roles
+  ```bash
+  for i in $(seq 6); do curl -sI http://$(minikube ip)/ | grep X-Served-By; done
+  ```
 
-**common** — runs on every VM:
-- Installs base packages: curl, wget, git, ufw, sshguard, rsync, acl
-- Creates `devops` group and user, added to `sudo` group (password required for sudo)
-- Adds the Jenkins public key to `devops` authorized_keys
-- Disables SSH password authentication and root login
-- Enables UFW with default deny-incoming, allows port 22
-- Adds all VM hostnames to `/etc/hosts` for hostname resolution
+- **External access**: Ingress `frontend` (`/`) on the Traefik ingress controller, which binds
+  port 80 of the node.
+- **Metrics**: the backend exposes Prometheus metrics on `/prometheus`, including the custom
+  counter `infra_metrics_served_total` and a request-duration histogram.
 
-**docker** — runs on every VM (the monitoring agents are containers):
-- Writes `/etc/docker/daemon.json` first: `insecure-registries` (`192.168.56.15:5000`) and container log rotation (10 MB × 3)
-- Installs Docker CE and the Compose v2 plugin (`docker compose`) from the official Docker repository
-- Adds `devops` to the docker group
+## Persistent storage
 
-**load-balancer**:
-- Installs nginx and jq
-- Deploys nginx config and template
-- Copies `adaptive_lb.sh` to `/home/devops/scripts/`
-- Adds sudoers rule for nginx reload without password
-- Schedules cron job every minute
+`manifests/storage/` holds a `local-storage` StorageClass without a provisioner and one
+PersistentVolume per stateful component — storage *provisioned by an administrator*. Each
+volume is a directory under `/data` on the Minikube node (Minikube keeps `/data` across
+restarts; `scripts/cluster-up.sh` creates the directories owned by the user each app runs
+as). `claimRef` binds every volume to exactly one claim:
 
-**app-server**:
-- Opens port 3001 only for web-server-1, web-server-2, ci-server and monitoring-server
-- Deploys backend container using docker-compose
-
-**web-server**:
-- Opens port 80 only from the load balancer, 3001 from the load balancer and monitoring-server
-- Creates `.env` with `BACKEND_HOST=192.168.56.13`
-- Deploys frontend and metrics sidecar containers
-
-**backup-server**:
-- Creates `/backups` and `/home/devops/scripts` directories
-- Copies `backup.sh` and `restore.sh`
-- Schedules weekly cron job (Sunday at 02:00)
-
-**ci-server**:
-- Opens ports 8080 (Jenkins) and 5000 (Docker registry)
-- Installs Java 21 and Jenkins
-- Adds `jenkins` to the docker group
-- Starts a Docker registry container on port 5000
-- Copies Jenkins private SSH key to `/var/lib/jenkins/.ssh/id_ed25519`
-- Adds deployment servers to `known_hosts`
-- Creates `/var/log/jenkins-notifications.log`
-
-**monitoring-server**:
-- Sets `vm.max_map_count=262144` (required by Elasticsearch)
-- Opens 3000 (Grafana), 5601 (Kibana), 9090 (Prometheus) and 5044 (Logstash, from 192.168.56.0/24)
-- Copies `monitoring/` to `/home/devops/monitoring`, writes `.env`, starts the stack with `docker compose up -d`
-- On config changes reloads Prometheus and restarts Grafana
-
-**monitoring-agents** — runs on every VM:
-- Opens 9100 (node-exporter) and 8081 (cAdvisor) only for monitoring-server
-- Copies `monitoring/agents/` to `/home/devops/monitoring-agents`, writes the per-host `.env` (host name, environment, Logstash address)
-- Starts node-exporter, cAdvisor and Filebeat with `docker compose up -d`
-
-### Idempotency
-
-All Ansible tasks are idempotent. Running `vagrant provision` multiple times does not cause unintended changes.
-
----
-
-## Load Balancing Algorithm
-
-The load balancer uses a **Resource-Based Adaptive** algorithm.
-
-Every minute, `scripts/adaptive_lb.sh`:
-
-1. Fetches `/metrics` from both web servers on port 3001 (metrics sidecar)
-2. Calculates a load score for each server:
-   ```
-   score = load_avg_1min * 50 + ram_usage_%
-   ```
-3. Assigns nginx weights inversely proportional to the score (range 1–10):
-   - Lower score = less load = higher weight = more traffic
-   - If a server is unreachable, its score is 999 and receives weight 1
-4. Writes the result into `/etc/nginx/conf.d/lb.conf` by substituting placeholders in the template
-5. Validates with `nginx -t` and reloads nginx
-
-Example log:
-```
-[2026-06-29 12:01:00] scores  -> web1=21.4  web2=67.8
-[2026-06-29 12:01:00] weights -> web1=8  web2=2
-[2026-06-29 12:01:00] nginx reloaded (web1=8 web2=2)
-```
-
----
-
-## CI/CD Pipeline
-
-Jenkins is accessible at `http://192.168.56.15:8080`.
-
-### Main pipeline (`Jenkinsfile`)
-
-| Stage | Action |
-|-------|--------|
-| Build | Build Docker images for backend and frontend |
-| Push | Push images to registry with `latest` and `$BUILD_NUMBER` tags |
-| Deploy backend | SSH to app-server, pull image, restart container |
-| Deploy frontend | SSH to web-server-1 and web-server-2, pull image, restart containers |
-| Deploy monitoring stack | rsync `monitoring/` to monitoring-server, `docker compose up -d`, reload Prometheus, restart Grafana |
-| Deploy monitoring agents | For all 7 VMs: rsync `monitoring/agents/`, write `.env` (host, `DEPLOY_ENV`, Logstash), `docker compose up -d` |
-| Smoke Test | Verify backend API, load balancer, web servers, `/prometheus` endpoint, Prometheus and Grafana; print scrape targets that are up |
-
-The pipeline has one parameter, `DEPLOY_ENV` (`lab` / `staging` / `production`), passed to the agents as the `environment` field of every log event.
-
-After every build, the result is written to `/var/log/jenkins-notifications.log` on ci-server.
-
-### Rollback pipeline (`Jenkinsfile.rollback`)
-
-A separate parameterized job that rolls back to any previous build:
-
-1. Takes `ROLLBACK_BUILD` parameter (build number, e.g. `5`)
-2. Pulls the versioned image tag from registry (`backend:5`, `frontend:5`)
-3. Redeploys on all servers
-4. Runs smoke tests to confirm the rollback succeeded
-5. Writes result to the notifications log
-
-### Setting up Jenkins
-
-After `vagrant up`, do the following once:
-
-**1. Restart Docker on ci-server** (required to pick up insecure registry config):
-```bash
-vagrant ssh ci-server -- sudo systemctl restart docker
-```
-
-**2. Unlock Jenkins** at `http://192.168.56.15:8080`:
-```bash
-vagrant ssh ci-server -- sudo cat /var/lib/jenkins/secrets/initialAdminPassword
-```
-Paste the password into the Jenkins unlock page, install suggested plugins, create an admin user.
-
-**3. Create the main pipeline job:**
-1. New Item → `infra-insight` → Pipeline
-2. Definition → `Pipeline script from SCM`
-3. SCM → Git, repository URL, branch `master`
-4. Script Path → `Jenkinsfile`
-5. Save → Build Now
-
-**4. Create the rollback job:**
-1. New Item → `infra-insight-rollback` → Pipeline
-2. Definition → `Pipeline script from SCM`
-3. SCM → Git, repository URL, branch `master`
-4. Script Path → `Jenkinsfile.rollback`
-5. Save
-
----
-
-## Security
-
-- SSH password authentication is disabled on all VMs
-- Root login via SSH is disabled on all VMs
-- UFW firewall enabled on all VMs with deny-incoming by default
-- Each VM only opens ports required for its specific role
-- `devops` is the only login-capable user on all VMs
-- `sudo` for `devops` requires a password (`devops_password` in `ansible/group_vars/all.yml`, default `DevOps!2026`); only the load-balancer's automated `nginx`/`tee` reload commands are exempt via a scoped NOPASSWD rule for the cron-driven adaptive LB script
-- `sshguard` blocks brute-force SSH attempts on all VMs
-- The Jenkins SSH private key is in `.gitignore` and is never committed
-
-### Firewall Rules
-
-| Server | Open ports |
-|--------|-----------|
-| load-balancer | 22 (any), 80 (any) |
-| web-server-1/2 | 22 (any), 80 (from load-balancer), 3001 (from load-balancer) |
-| app-server | 22 (any), 3001 (from web-server-1, web-server-2, ci-server) |
-| backup-server | 22 (any) |
-| ci-server | 22 (any), 8080 (any), 5000 (any) |
-| monitoring-server | 22 (any), 3000 / 5601 / 9090 (any), 5044 (from 192.168.56.0/24) |
-| every VM | + 9100, 8081 (from monitoring-server) |
-
-Note: ports published by Docker (`-p`) bypass UFW because Docker adds its own iptables rules. That's why the monitoring agents use the host network and Elasticsearch is published on `127.0.0.1` only.
-
----
-
-## SSH Key Setup
-
-Generate the Jenkins deploy key pair once before running `vagrant up`:
+| PersistentVolume | Claim | Used by |
+|---|---|---|
+| `registry-data` 5Gi | `registry/registry-data` | pushed images |
+| `jenkins-home` 5Gi | `jenkins/jenkins-home` | jobs, build history, archived Trivy reports |
+| `trivy-cache` 2Gi | `jenkins/trivy-cache` | Trivy's vulnerability database, shared by build agents |
+| `prometheus-data` 5Gi | `monitoring/prometheus-data` | metrics (7 days / 4 GB) |
+| `grafana-data` 1Gi | `monitoring/grafana-data` | users, preferences, annotations |
+| `elasticsearch-data` 10Gi | `logging/data-elasticsearch-0` | log indices (deleted after 7 days) |
 
 ```bash
-ssh-keygen -t ed25519 -f ansible/files/jenkins_key -N ""
+kubectl get pv,pvc -A                  # everything Bound
+kubectl -n jenkins delete pod -l app.kubernetes.io/name=jenkins   # history survives the restart
 ```
 
-The private key (`ansible/files/jenkins_key`) is in `.gitignore` and must never be committed. The public key (`ansible/files/jenkins_key.pub`) is committed and distributed automatically by Ansible.
+## CI/CD pipeline
 
----
+Jenkins runs in the `jenkins` namespace, fully configured by
+[Configuration as Code](manifests/cicd/jenkins-casc.yaml): admin user from a Secret, the
+Kubernetes cloud, and the `infra-insight` pipeline job, which polls this repository every two
+minutes. The controller has no executors: every build runs in a fresh agent pod
+([cicd/agent-pod.yaml](cicd/agent-pod.yaml)) that is deleted afterwards.
 
-## Backup and Restore
+| Stage | Container | What happens |
+|---|---|---|
+| Test | `node` | `npm ci`, TypeScript build of the backend, lint + build of the frontend |
+| Build images | `kaniko` | builds both Dockerfiles without a Docker daemon, pushes `10.96.0.50/<app>:<build>-<commit>` (layer cache in the registry) |
+| Scan images | `trivy` | report of HIGH + CRITICAL findings (archived with the build); **any CRITICAL vulnerability fails the build before deploy** |
+| Deploy | `tools` | `kubectl apply -k` of the app manifests with the new tags, waits for the rollout |
+| Smoke test | `tools` | UI, `/api/health`, `/api/metrics` and the backend's metrics endpoint inside the cluster; on failure both deployments are rolled back |
 
-The backup server runs automatically every Sunday at 02:00.
+**Permissions** ([manifests/cicd/rbac.yaml](manifests/cicd/rbac.yaml)): the controller's
+ServiceAccount may only manage pods in `jenkins`; the agents run as `jenkins-deployer`, which
+may update the app's Deployments, Services, ConfigMaps, Ingress, HPA and PDB in `app` — no
+Secrets, no deletes, no other namespace.
 
-Manual backup:
 ```bash
-vagrant ssh backup-server
-/home/devops/scripts/backup.sh
+# trigger: push a commit (picked up within 2 minutes), or "Build Now" in Jenkins
+kubectl -n jenkins get pods -w                      # the agent pod appears and goes away
+kubectl -n app get deploy -o wide                   # images now carry the new build tag
 ```
 
-Restore from a specific date:
-```bash
-vagrant ssh backup-server
-/home/devops/scripts/restore.sh <server-name> <date>
+The scan gate is not theoretical: the first run on this cluster failed on CVE-2026-90711 in
+`proxy-addr` (a dependency of Express) and the second on CVE-2026-111497 in Alpine's
+`brotli-libs`; both were fixed in the repository before anything was deployed.
 
-# Example:
-/home/devops/scripts/restore.sh web-server-1 2026-06-29
-```
+## Monitoring
 
-Logs: `/var/log/backup.log`
+Prometheus discovers its targets through the Kubernetes API, so new pods are picked up
+automatically ([prometheus.yml](manifests/monitoring/prometheus/prometheus.yml)):
 
----
-
-## Monitoring & Logging
-
-Full details, design decisions and the theory behind them: **[docs/MONITORING.md](docs/MONITORING.md)**.
-
-**Metrics** — Prometheus scrapes every 15 s: node-exporter (host), cAdvisor (containers), the backend's `/prometheus` endpoint (prom-client) and Elasticsearch health. Retention: 30 days / 5 GB.
-
-**Logs** — Filebeat on every VM ships syslog, auth.log, our scripts' logs and all container logs to Logstash, which parses them (grok for syslog, JSON for the backend's winston logs) into daily Elasticsearch indices `infra-system-*`, `infra-app-*`, `infra-docker-*`. Retention: 30 days (ILM). Elasticsearch runs as a 2-node cluster (replicas on the second node).
-
-**Dashboards**
-
-| Grafana (folder *Infrastructure*) | Kibana (Dashboards) |
+| Job | Source |
 |---|---|
-| VM Performance | System Logs |
-| Docker Containers | Application Logs |
-| Application Performance | Docker Logs |
+| `apiserver` | the Kubernetes API server |
+| `kubelet`, `cadvisor` | each node's kubelet: CPU, memory and network of every container |
+| `node-exporter` | the node itself: CPU, memory, disk, network, load |
+| `kube-state-metrics` | object state: pod phases, restarts, requests/limits, replicas, HPA |
+| `kubernetes-pods` | every pod annotated `prometheus.io/scrape: "true"` — backend, Traefik, Fluent Bit, elasticsearch-exporter, Alertmanager |
 
-**Alerts** (Grafana, notifications to the `alert-receiver` webhook):
+Grafana dashboards (folder *Kubernetes*, provisioned from
+[manifests/monitoring/grafana/dashboards](manifests/monitoring/grafana/dashboards)):
+
+- **Cluster Performance** — nodes ready, pods by phase, API server status, firing alerts;
+  node CPU / memory / disk / network / load with the alert thresholds drawn in; CPU and
+  memory requested vs allocatable; usage per namespace; deployments.
+- **Pods & Containers** — per namespace and pod: CPU, CPU throttling, memory and memory vs
+  limit, restarts, pod status, containers not running (CrashLoopBackOff, ...), network in/out,
+  requests and limits.
+- **Application Performance** — backend request rate, status codes, 5xx rate, p50/p95/p99
+  latency; frontend traffic, latency and error rate measured at the ingress; frontend CPU and
+  replicas (HPA); the custom metric; Node.js heap, event-loop lag and CPU.
+
+## Logging
+
+```
+container stdout/stderr ─┐
+journald (kubelet, ...) ─┼─> Fluent Bit (DaemonSet) ─> Elasticsearch ─> Kibana
+Kubernetes events ───────┘     + pod / namespace / labels
+```
+
+Fluent Bit ([fluent-bit.yaml](manifests/logging/fluent-bit/fluent-bit.yaml)) reads three
+sources on every node, adds Kubernetes metadata, and parses the JSON logs of the app
+(`level`, `status`, `path`, `durationMs` from the backend; nginx access log fields from the
+frontend). Everything goes to daily indices `k8s-logs-YYYY.MM.DD`; the field `log_source`
+(`container` / `node` / `event`) tells them apart. An index template keeps them at 0 replicas
+(single node → status green) and a lifecycle policy deletes them after 7 days.
+
+Elasticsearch runs with security on: Kibana, Fluent Bit and the exporter have their own users
+with only the privileges they need (created by a setup Job).
+
+Kibana dashboards (imported by a Job, default data view *Kubernetes logs*):
+
+- **Cluster Logs** — node services (journald), Kubernetes events by reason, warning events,
+  control-plane components in `kube-system`.
+- **Application Logs** — backend log levels, HTTP status codes, response times, top paths,
+  errors & warnings, access log.
+- **Pod & Container Logs** — log volume per namespace and pod, stdout vs stderr per container,
+  stderr over time, latest lines with pod / container / stream.
+
+## Alerting
+
+[Rules](manifests/monitoring/prometheus/alerts.yaml) are evaluated by Prometheus; firing
+alerts go to [Alertmanager](manifests/monitoring/alertmanager/alertmanager.yml), which groups
+them and posts them to the in-cluster **alert-receiver**. It prints one line per alert
+(`kubectl -n monitoring logs -f deploy/alert-receiver` — and Kibana) and forwards it to a
+Slack-compatible webhook if `ALERT_WEBHOOK_URL` is set in `.secrets/credentials.env`.
 
 | Alert | Condition |
 |---|---|
-| High CPU usage | CPU > 80% for 5 minutes (iowait not counted) |
-| High memory usage | memory > 90% for 5 minutes |
-| Low disk space | free space on `/` < 20% |
-| VM unreachable | no successful node-exporter scrape for 2 minutes (fires after ~3 min) |
-| Container restarting | > 3 restarts in 15 minutes |
-| Container memory near limit | > 80% of its memory limit |
-| Elasticsearch cluster yellow or red | cluster health not green for 1 minute |
-| Elasticsearch unreachable / Backend instance down | health check failing |
+| `NodeHighCPU` | node CPU > 80% for 5 min |
+| `NodeLowDiskSpace` | < 20% free on a node disk |
+| `NodeHighMemory` | node memory > 90% for 5 min |
+| `PodRestartingTooOften` | > 3 container restarts in 15 min |
+| `ContainerMemoryNearLimit` | working set > 80% of the memory limit |
+| `PodPendingTooLong` | pod Pending for > 5 min |
+| `KubeAPIServerDown` | API server not scrapable for 1 min |
+| `ElasticsearchClusterYellow` / `ElasticsearchClusterRed` | cluster health yellow / red |
+| `ElasticsearchUnreachable` | the exporter can't reach Elasticsearch |
+| `FluentBitOutputErrors` | Fluent Bit's output errors, dropped chunks or ongoing retries |
+| `FluentBitDown` | a Fluent Bit pod can't be scraped |
 
-Logstash additionally sends notifications for log patterns: failed SSH/sudo logins, OOM killer, failed CI builds, backend errors (throttled to one per rule and host every 5 minutes).
-
-See all notifications:
-```bash
-vagrant ssh monitoring-server -c "docker logs -f alert-receiver"
-```
-
-**Testing the alerts** — run on the VM that should alert:
-```bash
-vagrant ssh app-server -c "bash /vagrant/scripts/simulate-alerts.sh cpu"                 # CPU > 80% for 7 min
-vagrant ssh web-server-1 -c "bash /vagrant/scripts/simulate-alerts.sh memory"            # memory at ~92% for 7 min
-vagrant ssh app-server -c "bash /vagrant/scripts/simulate-alerts.sh disk"                # fill / to 85%
-vagrant ssh app-server -c "bash /vagrant/scripts/simulate-alerts.sh container-restarts"  # crash-looping container
-vagrant ssh app-server -c "bash /vagrant/scripts/simulate-alerts.sh container-memory"    # 225M in a 256M container
-vagrant ssh load-balancer -c "bash /vagrant/scripts/simulate-alerts.sh unreachable"      # host-only interface down for 5 min
-vagrant ssh monitoring-server -c "bash /vagrant/scripts/simulate-alerts.sh es-yellow"    # stop es02 (es-green to restore)
-vagrant ssh app-server -c "bash /vagrant/scripts/simulate-alerts.sh log-alert"           # fake failed SSH login
-vagrant ssh app-server -c "bash /vagrant/scripts/simulate-alerts.sh cleanup"
-```
-
-Run one test per VM at a time — the VMs are small, several heavy tests at once make a VM so slow that the results get muddy. Timings and results of a full test run: [docs/MONITORING.md](docs/MONITORING.md#test-run-2026-10-14).
-
-Optional settings (`ansible/group_vars/all.yml`): `grafana_admin_password`, `monitoring_environment`, `prometheus_retention_time`, `prometheus_retention_size`, `alert_forward_webhook_url` (Slack / Discord webhook to forward notifications to).
-
----
-
-## API
-
-```
-GET /metrics
-```
-
-Response:
-```json
-{
-  "hostname": "web-server-1",
-  "os": { "type": "Linux", "platform": "linux", "release": "5.15.0" },
-  "cpu": { "model": "Intel Core...", "cores": 1, "loadAvg": [0.12, 0.08, 0.03] },
-  "ram": { "total": 987, "used": 412, "free": 575 },
-  "uptime": 18432,
-  "timestamp": "2026-06-29T10:00:00.000Z"
-}
-```
-
-```
-GET /prometheus
-```
-
-The same backend's metrics in Prometheus text format (scraped by Prometheus): Node.js runtime metrics, `http_request_duration_seconds` histogram and the custom counter `infra_metrics_served_total`.
-
----
-
-## Useful Commands
+Each alert can be triggered on purpose:
 
 ```bash
-# Start all 7 VMs
-vagrant up
-
-# Destroy everything and start from scratch
-vagrant destroy -f && vagrant up
-
-# SSH into a specific VM
-vagrant ssh load-balancer
-vagrant ssh ci-server
-
-# Re-run Ansible on one VM only
-vagrant provision app-server
-
-# Check status of all VMs
-vagrant status
-
-# Monitor adaptive load balancing in real time
-vagrant ssh load-balancer -- sudo tail -f /var/log/adaptive_lb.log
-
-# Verify nginx config and current weights
-vagrant ssh load-balancer -- cat /etc/nginx/conf.d/lb.conf
-
-# Check running containers on app-server
-vagrant ssh app-server -- docker ps
-
-# Check Jenkins logs
-vagrant ssh ci-server -- sudo journalctl -u jenkins -f
-
-# Monitor CI/CD notifications
-vagrant ssh ci-server -- sudo tail -f /var/log/jenkins-notifications.log
-
-# Check Docker registry contents
-curl http://192.168.56.15:5000/v2/_catalog
-curl http://192.168.56.15:5000/v2/backend/tags/list
-
-# Monitoring stack status / logs
-vagrant ssh monitoring-server -c "cd /home/devops/monitoring && sudo -u devops docker compose ps"
-vagrant ssh monitoring-server -c "sudo docker logs -f logstash"
-
-# Elasticsearch cluster health and indices
-vagrant ssh monitoring-server -c "curl -s localhost:9200/_cluster/health?pretty"
-vagrant ssh monitoring-server -c "curl -s 'localhost:9200/_cat/indices/infra-*?v'"
-
-# Agents on any VM
-vagrant ssh web-server-1 -c "sudo docker ps --filter name=node-exporter --filter name=cadvisor --filter name=filebeat"
-
-# Reload Prometheus after editing monitoring/prometheus/*
-vagrant ssh monitoring-server -c "curl -X POST localhost:9090/-/reload"
+scripts/simulate-alerts.sh                # list of scenarios
+scripts/simulate-alerts.sh pod-restarts   # prints the alert going inactive -> pending -> firing
+kubectl -n monitoring logs -f deploy/alert-receiver
 ```
 
----
+## Autoscaling
 
-## Troubleshooting the host
+The frontend has a HorizontalPodAutoscaler (CPU target 50% of the request, 2–5 replicas,
+scale-down after one quiet minute). metrics-server provides the CPU numbers.
 
-**`AMD-V is disabled in the BIOS (VERR_SVM_DISABLED)` / `VT-x is disabled`** — hardware virtualization is off in the firmware (BIOS updates reset it). Enable *SVM Mode* (AMD) or *Intel Virtualization Technology* in the BIOS.
-
-**VMs are very slow, VBox.log says `Attempting fall back to NEM`** — Windows runs its own hypervisor (Hyper-V, needed by WSL2 / Docker Desktop / VBS), so VirtualBox can't use AMD-V/VT-x directly and runs on top of Hyper-V ("turtle" icon). Elasticsearch and Kibana then take 10–20 minutes to start. Turn the Windows hypervisor off in an **administrator** terminal and reboot (WSL2 and Docker Desktop won't work until it's back on):
-```powershell
-bcdedit /set hypervisorlaunchtype off
-reg add "HKLM\SYSTEM\CurrentControlSet\Control\DeviceGuard" /v EnableVirtualizationBasedSecurity /t REG_DWORD /d 0 /f
+```bash
+scripts/load-test.sh          # 3 min of load through the ingress; prints CPU and replicas
 ```
-To undo: `bcdedit /set hypervisorlaunchtype auto` and set `EnableVirtualizationBasedSecurity` back to `1`, then reboot.
 
-**Not enough RAM** — close browsers/games before `vagrant up`. During a demo, VMs you don't need at the moment can be paused with `vagrant suspend <vm>` (frees their RAM) and brought back with `vagrant resume <vm>` — note that a suspended VM fires the *VM unreachable* alert.
+```
+00:23:08  cpu  226% of request (target 50%)   replicas 5 -> 5   load: Succeeded
+00:24:58  cpu    2% of request (target 50%)   replicas 5 -> 5   load: Succeeded
+00:25:45  cpu    2% of request (target 50%)   replicas 5 -> 4   load: Succeeded
+00:26:48  cpu    2% of request (target 50%)   replicas 3 -> 2   load: Succeeded
+Code 200 : 314744 (100.0 %)
+All done 314744 calls (plus 32 warmup) 9.150 ms avg, 3497.0 qps
+```
 
-**First provisioning after a VM was off for a long time** — Ubuntu's unattended-upgrades runs right after boot and holds the apt lock; the `common` role waits for it (can take a few minutes) and finishes interrupted `dpkg` runs automatically.
+## Security
 
-**Jenkins job fails before the first stage with `Failed to exec spawn helper ... JDK version mismatch`** — unattended-upgrades updated the JDK while Jenkins was running. Restart Jenkins: `vagrant ssh ci-server -c "sudo systemctl restart jenkins"`. Provisioning configures `needrestart` to restart affected services automatically after updates, so this only happens on VMs that weren't re-provisioned since.
+See [security/README.md](security/README.md) for the full list. In short:
+
+- **Pod Security Admission** labels on every namespace (`restricted` where possible)
+- every container: non-root, no privilege escalation, all capabilities dropped,
+  `RuntimeDefault` seccomp, read-only root filesystem wherever the app allows it
+- **resources** on every container, LimitRange defaults and ResourceQuotas
+- **RBAC**: one ServiceAccount per component with only the verbs it needs;
+  `automountServiceAccountToken: false` where the API isn't used
+- **Secrets** for every password, generated per installation, never in git
+- images: pinned versions, scanned by Trivy before every deploy
+- Prometheus and Alertmanager have no login of their own → basic auth at the ingress
+- optional **NetworkPolicies** (default deny + explicit allow rules)
+
+## Bonus features
+
+- **NetworkPolicies** (Calico enforces them): `kubectl apply -k security/network-policies`
+  — default-deny ingress in every namespace plus the exact flows the platform needs
+  (undo with `kubectl delete -k security/network-policies`).
+- **Automatic rollback**: a failed smoke test rolls the app back with `kubectl rollout undo`.
+- **Alert forwarding** to Slack / Discord: set `ALERT_WEBHOOK_URL`, run `scripts/deploy.sh`.
+- **Alert simulation** for every rule: `scripts/simulate-alerts.sh`.
+- **One-command health check**: `scripts/verify.sh`.
+- **Ingress basic auth** for Prometheus and Alertmanager (Traefik middleware, users from a Secret).
+
+## Usage guide
+
+```bash
+kubectl get pods -A                                    # everything
+kubectl -n app get deploy,svc,ingress,hpa
+kubectl -n app logs deploy/backend -f
+kubectl -n app describe pod <pod>                      # events: scheduling, probes, image pulls
+kubectl -n app rollout history deployment/frontend
+kubectl -n app rollout undo deployment/frontend        # back to the previous version
+kubectl top pods -A                                    # CPU / memory (metrics-server)
+kubectl apply -k manifests/monitoring                  # re-apply one part after a change
+minikube ssh                                           # shell on the node
+```
+
+Re-running `scripts/deploy.sh` is safe: it keeps the image tags the pipeline deployed last.
+To start over: `minikube delete`, then `scripts/cluster-up.sh` and `scripts/deploy.sh`
+(passwords in `.secrets/` are reused).
+
+## Troubleshooting
+
+| Problem | Fix |
+|---|---|
+| `minikube start` hangs creating a host-only network on Windows | `scripts/cluster-up.sh` reuses VirtualBox's existing `192.168.56.1/24` network; creating a new one needs admin rights |
+| VirtualBox VM very slow on Windows | turn the Windows hypervisor off (`bcdedit /set hypervisorlaunchtype off`, reboot); otherwise VirtualBox runs on top of Hyper-V |
+| Pods `Pending` with *Insufficient memory* | give the VM more RAM: `MINIKUBE_MEMORY=8000 scripts/cluster-up.sh` on a fresh cluster |
+| `ImagePullBackOff` on `10.96.0.50/...` | run `scripts/cluster-up.sh` again: it rewrites the node's registry config, which lives in RAM |
+| kubectl warns about version skew | the cluster runs Kubernetes 1.35; use kubectl 1.34–1.36 |
+| Kibana restarts with *heap out of memory* | it needs about 1 GB on first start (saved object migrations) |
+
+## History
+
+Until this migration the project ran on seven Vagrant + Ansible virtual machines (load
+balancer, two web servers, app server, backup server, Jenkins, monitoring). That version is
+kept under the tag [`vm-infrastructure`](../../tree/vm-infrastructure).
+
+Design decisions and the problems met during the migration are described in
+[docs/DESIGN.md](docs/DESIGN.md).
