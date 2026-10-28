@@ -64,6 +64,11 @@ spec:
         # the in-cluster registry speaks plain HTTP
         - name: TRIVY_INSECURE
           value: "true"
+        # findings only, without the per-file summary table
+        - name: TRIVY_TABLE_MODE
+          value: detailed
+        - name: TRIVY_DISABLE_VEX_NOTICE
+          value: "true"
       resources:
         requests: { cpu: 100m, memory: 256Mi }
         limits: { cpu: "1", memory: 1Gi }
