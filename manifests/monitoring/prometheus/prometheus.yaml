@@ -81,7 +81,7 @@ spec:
             # history lives on the persistent volume; old data is dropped after 7 days or 4 GB
             - --storage.tsdb.retention.time=7d
             - --storage.tsdb.retention.size=4GB
-            - --web.external-url=http://192.168.56.100/prometheus/
+            - --web.external-url=/prometheus/
             - --web.route-prefix=/prometheus
             - --web.enable-lifecycle
           ports:

@@ -15,6 +15,7 @@ configMapGenerator:
       # the pipeline job polls this repository for new commits
       - GIT_REPO_URL=https://github.com/spamook/automation-alchemy.git
       - GIT_BRANCH=master
+      # used in the links Jenkins generates; scripts/deploy.sh sets the real Minikube IP
       - JENKINS_PUBLIC_URL=http://192.168.56.100/jenkins/
 
 images:

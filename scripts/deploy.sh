@@ -25,10 +25,13 @@ step "all manifests"
 # The manifests carry the bootstrap tag "initial". Once the pipeline has deployed newer
 # images, keep those: apply through a generated overlay with the tags that run now.
 tag_of() {
-    kubectl -n app get deployment "$1" -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null \
-        | sed -n 's/.*://p'
+    local image
+    # empty on a fresh cluster, where the deployment doesn't exist yet
+    image=$(kubectl -n app get deployment "$1" -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null) || true
+    if [ -n "$image" ]; then echo "${image##*:}"; fi
 }
 backend_tag=$(tag_of backend); frontend_tag=$(tag_of frontend)
+ip=$(minikube ip)
 mkdir -p .deploy
 cat > .deploy/kustomization.yaml <<EOF
 apiVersion: kustomize.config.k8s.io/v1beta1
@@ -40,6 +43,42 @@ images:
     newTag: "${backend_tag:-initial}"
   - name: $REGISTRY/frontend
     newTag: "${frontend_tag:-initial}"
+# the address Jenkins, Kibana and Alertmanager use in the links they generate
+configMapGenerator:
+  - name: jenkins-env
+    namespace: jenkins
+    behavior: merge
+    literals:
+      - JENKINS_PUBLIC_URL=http://$ip/jenkins/
+patches:
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: kibana
+        namespace: logging
+      spec:
+        template:
+          spec:
+            containers:
+              - name: kibana
+                env:
+                  - name: SERVER_PUBLICBASEURL
+                    value: http://$ip/kibana
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: alertmanager
+        namespace: monitoring
+      spec:
+        template:
+          spec:
+            containers:
+              - name: alertmanager
+                env:
+                  - name: PUBLIC_URL
+                    value: http://$ip/alertmanager/
 EOF
 # a Job's pod template can't change: remove finished setup Jobs so new versions run
 kubectl -n logging delete job elasticsearch-setup kibana-setup --ignore-not-found

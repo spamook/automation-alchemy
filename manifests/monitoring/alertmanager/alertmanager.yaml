@@ -33,10 +33,14 @@ spec:
           args:
             - --config.file=/etc/alertmanager/alertmanager.yml
             - --storage.path=/alertmanager
-            - --web.external-url=http://192.168.56.100/alertmanager/
+            # absolute URL required; scripts/deploy.sh sets the real Minikube IP
+            - --web.external-url=$(PUBLIC_URL)
             - --web.route-prefix=/alertmanager
             # a single instance: no gossip cluster
             - --cluster.listen-address=
+          env:
+            - name: PUBLIC_URL
+              value: http://192.168.56.100/alertmanager/
           ports:
             - name: http
               containerPort: 9093
