@@ -1,0 +1,119 @@
+# Alert rules. "for" = how long the condition has to hold before the alert fires (until
+# then it is "pending"), so short spikes don't page anyone. Firing alerts go to
+# Alertmanager, which groups them and sends them to the receivers.
+groups:
+  - name: node
+    rules:
+      - alert: NodeHighCPU
+        expr: 100 * (1 - avg by (node) (rate(node_cpu_seconds_total{mode="idle"}[2m]))) > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Node {{ $labels.node }}: CPU usage {{ $value | printf \"%.0f\" }}% for more than 5 minutes"
+
+      # one disk is mounted at several paths on the Minikube VM: group by device, not mountpoint
+      - alert: NodeLowDiskSpace
+        expr: |
+          100 * min by (node, device) (
+            node_filesystem_avail_bytes{fstype=~"ext4|xfs|btrfs"}
+              / node_filesystem_size_bytes{fstype=~"ext4|xfs|btrfs"}
+          ) < 20
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Node {{ $labels.node }}: only {{ $value | printf \"%.0f\" }}% disk space left on {{ $labels.device }}"
+
+      - alert: NodeHighMemory
+        expr: 100 * (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) > 90
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Node {{ $labels.node }}: memory usage {{ $value | printf \"%.0f\" }}% for more than 5 minutes"
+
+  - name: pods
+    rules:
+      # changes() counts restarts exactly; increase() could extrapolate 3 restarts to 3.2
+      - alert: PodRestartingTooOften
+        expr: changes(kube_pod_container_status_restarts_total[15m]) > 3
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.namespace }}/{{ $labels.pod }} ({{ $labels.container }}) restarted {{ $value }} times in 15 minutes"
+
+      - alert: ContainerMemoryNearLimit
+        expr: |
+          100 * max by (namespace, pod, container) (container_memory_working_set_bytes{container!=""})
+            / on (namespace, pod, container)
+          max by (namespace, pod, container) (kube_pod_container_resource_limits{resource="memory"}) > 80
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.namespace }}/{{ $labels.pod }} ({{ $labels.container }}) uses {{ $value | printf \"%.0f\" }}% of its memory limit"
+
+      - alert: PodPendingTooLong
+        expr: max by (namespace, pod) (kube_pod_status_phase{phase="Pending"}) == 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.namespace }}/{{ $labels.pod }} has been Pending for more than 5 minutes"
+
+  - name: cluster
+    rules:
+      # absent(): also fires when there is no apiserver series at all
+      - alert: KubeAPIServerDown
+        expr: absent(up{job="apiserver"} == 1)
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "The Kubernetes API server is unreachable"
+
+  - name: logging
+    rules:
+      - alert: ElasticsearchClusterYellow
+        expr: max(elasticsearch_cluster_health_status{color="yellow"}) == 1
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Elasticsearch cluster status is YELLOW (some replica shards are not allocated)"
+
+      - alert: ElasticsearchClusterRed
+        expr: max(elasticsearch_cluster_health_status{color="red"}) == 1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Elasticsearch cluster status is RED (some primary shards are not allocated)"
+
+      - alert: ElasticsearchUnreachable
+        expr: max(elasticsearch_cluster_health_up) == 0 or absent(elasticsearch_cluster_health_up)
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Elasticsearch does not answer the exporter's health checks"
+
+      - alert: FluentBitOutputErrors
+        expr: |
+          sum by (pod, name) (increase(fluentbit_output_errors_total[5m])) > 0
+            or
+          sum by (pod, name) (increase(fluentbit_output_retries_failed_total[5m])) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Fluent Bit {{ $labels.pod }} fails to ship logs (output {{ $labels.name }})"
+
+      - alert: FluentBitDown
+        expr: up{job="fluent-bit"} == 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Fluent Bit {{ $labels.pod }} can't be scraped, logs from its node may be lost"

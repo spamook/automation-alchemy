@@ -1,0 +1,15 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - prometheus.yaml
+
+# new hash suffix on every change -> Prometheus restarts with the new config/rules
+configMapGenerator:
+  - name: prometheus-config
+    namespace: monitoring
+    files:
+      - prometheus.yml
+  - name: prometheus-rules
+    namespace: monitoring
+    files:
+      - alerts.yaml
