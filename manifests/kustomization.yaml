@@ -1,0 +1,14 @@
+# Everything in one go: kubectl apply -k manifests
+# (kustomize orders the output by kind: namespaces, RBAC and storage come before workloads)
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespaces
+  - storage
+  - registry
+  - ingress
+  - backend
+  - frontend
+  - cicd
+  - monitoring
+  - logging
