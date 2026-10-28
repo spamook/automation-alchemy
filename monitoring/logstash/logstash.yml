@@ -1,7 +1,0 @@
-http.host: "0.0.0.0"
-# pick up edits of pipeline/*.conf without restarting the container
-config.reload.automatic: true
-config.reload.interval: 30s
-# 1 worker is plenty for this lab and keeps the throttle filter exact
-pipeline.workers: 1
-xpack.monitoring.enabled: false
