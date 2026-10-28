@@ -786,7 +786,7 @@
     {
       "type": "gauge",
       "title": "CPU requested",
-      "description": "Share of the node's allocatable CPU reserved by pod requests",
+      "description": "Share of the node's allocatable CPU reserved by the requests of running pods",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -798,7 +798,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(kube_pod_container_resource_requests{resource=\"cpu\"}) / sum(kube_node_status_allocatable{resource=\"cpu\"}) * 100",
+          "expr": "sum(kube_pod_container_resource_requests{resource=\"cpu\"} and on (namespace, pod) (kube_pod_status_phase{phase=\"Running\"} == 1)) / sum(kube_node_status_allocatable{resource=\"cpu\"}) * 100",
           "legendFormat": ""
         }
       ],
@@ -849,7 +849,7 @@
     {
       "type": "gauge",
       "title": "Memory requested",
-      "description": "Share of the node's allocatable memory reserved by pod requests",
+      "description": "Share of the node's allocatable memory reserved by the requests of running pods",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -861,7 +861,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(kube_pod_container_resource_requests{resource=\"memory\"}) / sum(kube_node_status_allocatable{resource=\"memory\"}) * 100",
+          "expr": "sum(kube_pod_container_resource_requests{resource=\"memory\"} and on (namespace, pod) (kube_pod_status_phase{phase=\"Running\"} == 1)) / sum(kube_node_status_allocatable{resource=\"memory\"}) * 100",
           "legendFormat": ""
         }
       ],
