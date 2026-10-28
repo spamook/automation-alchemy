@@ -127,8 +127,8 @@ The VM has 7 GB; Minikube's OS lives in RAM (~1.2 GB), so the platform must fit 
 
 | Component | Memory |
 |---|---|
-| Elasticsearch (512 MB heap) | ~900 MB |
-| Kibana (needs 1 GB heap for its first start) | ~600–900 MB |
+| Elasticsearch (512 MB heap + Lucene and network buffers outside it) | ~1 GB |
+| Kibana (768 MB heap: 512 MB is too little for its first start) | ~700–900 MB |
 | Jenkins (512 MB heap) | ~650 MB |
 | Kubernetes control plane + Calico | ~600 MB |
 | Grafana | ~350 MB |
@@ -145,12 +145,15 @@ The VM has 7 GB; Minikube's OS lives in RAM (~1.2 GB), so the platform must fit 
 | pipeline #1 failed at the scan | CVE-2026-90711 (critical) in `proxy-addr`, pulled in by Express | updated the lockfile, `npm audit` clean |
 | pipeline #2 failed at the scan | CVE-2026-111497 (critical) in Alpine's `brotli-libs` in the nginx base image | `apk upgrade` in both Dockerfiles |
 | Elasticsearch and Kibana stuck in `ImagePullBackOff` | the version taken from Elastic's artifacts API (9.5.6) had no published image yet | checked the registry's tag list, pinned 9.5.5 |
-| Kibana crash-looping | Kibana 9 runs out of a 512 MB heap during its first-start migrations | 1 GB heap, 1.4 GiB limit |
+| Kibana crash-looping | Kibana 9 runs out of a 512 MB heap during its first-start migrations | 768 MB heap, 1.2 GiB limit |
 | StatefulSet kept the broken pod after the image fix | StatefulSets don't replace a pod that never became ready | deleted the pod once |
 | `ElasticsearchUnreachable` kept firing with a healthy cluster | elasticsearch-exporter 1.11 no longer has `elasticsearch_cluster_health_up`, so `absent()` was always true | alert on `elasticsearch_clusterinfo_up` |
 | `ContainerMemoryNearLimit` fired for Grafana | Grafana 13 needs ~350 MB, its limit was 384 MiB | limit raised to 512 MiB |
+| `ContainerMemoryNearLimit` fired for Elasticsearch | ~1 GB in use with a 512 MB heap, the limit was 1.25 GiB | limit raised to 1.5 GiB |
+| a fresh `scripts/deploy.sh` stopped right after "all manifests" | reading the current image tag failed on a cluster without the app, and `set -e` ended the script | the lookup is allowed to come back empty; found by running everything from scratch |
+| the new VM got `192.168.56.101` instead of `.100` | VirtualBox's DHCP still held the lease of the deleted VM | links in Jenkins, Kibana and Alertmanager use the address `deploy.sh` reads from `minikube ip` |
 
 The monitoring caught several of these on its own: `ElasticsearchUnreachable`,
 `PodPendingTooLong` (pods waiting for images), `FluentBitOutputErrors` (nowhere to send logs),
-`PodRestartingTooOften` (Kibana) and `ContainerMemoryNearLimit` (Grafana) fired before anyone
+`PodRestartingTooOften` (Kibana) and `ContainerMemoryNearLimit` (Grafana, Elasticsearch) fired before anyone
 looked, and resolved once the problems were fixed.

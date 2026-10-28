@@ -36,7 +36,7 @@ scripts/verify.sh        # checks every part end to end
 scripts/info.sh          # prints the URLs and logins again
 ```
 
-Everything is reachable on the Minikube IP (`minikube ip`, usually `192.168.56.100`):
+Everything is reachable on the Minikube IP (`minikube ip`, e.g. `192.168.56.101`):
 
 | URL | What | Login |
 |---|---|---|
@@ -219,6 +219,9 @@ kubectl -n jenkins get pods -w                      # the agent pod appears and 
 kubectl -n app get deploy -o wide                   # images now carry the new build tag
 ```
 
+Building from a fork: point `GIT_REPO_URL` in
+[manifests/cicd/kustomization.yaml](manifests/cicd/kustomization.yaml) at it and re-apply.
+
 The scan gate is not theoretical: the first run on this cluster failed on CVE-2026-90711 in
 `proxy-addr` (a dependency of Express) and the second on CVE-2026-111497 in Alpine's
 `brotli-libs`; both were fixed in the repository before anything was deployed.
@@ -377,7 +380,7 @@ To start over: `minikube delete`, then `scripts/cluster-up.sh` and `scripts/depl
 | Pods `Pending` with *Insufficient memory* | give the VM more RAM: `MINIKUBE_MEMORY=8000 scripts/cluster-up.sh` on a fresh cluster |
 | `ImagePullBackOff` on `10.96.0.50/...` | run `scripts/cluster-up.sh` again: it rewrites the node's registry config, which lives in RAM |
 | kubectl warns about version skew | the cluster runs Kubernetes 1.35; use kubectl 1.34–1.36 |
-| Kibana restarts with *heap out of memory* | it needs about 1 GB on first start (saved object migrations) |
+| Kibana restarts with *heap out of memory* | its first start (saved object migrations) needs more than a 512 MB heap; the manifest gives it 768 MB |
 
 ## History
 
